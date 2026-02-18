@@ -6,6 +6,7 @@ import authRouter from "./routes/auth"
 const app = express()
 
 app.use(express.json())
+app.use(errorHandler)
 app.use("/auth", authRouter)
 
 export default app
