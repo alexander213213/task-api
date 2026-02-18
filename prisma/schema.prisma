@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TaskStatus {
+  OPEN
+  ASSIGNED
+  COMPLETED
+}
+
+model User {
+  id           String     @id @default(cuid())
+  username     String     @unique
+  email        String     @unique
+  firstName    String
+  lastName     String
+  middleName   String?
+  passwordHash String
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  proposals    Proposal[]
+  tasksPosted  Task[]     @relation("TaskPosted")
+  taskAccepted Task[]     @relation("TaskAccepted")
+}
+
+model Task {
+  id          String     @id @default(cuid())
+  title       String
+  description String?
+  reward      Decimal
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  proposals   Proposal[]
+  owner       User       @relation("TaskPosted", fields: [ownerId], references: [id], onDelete: Cascade)
+  tasker      User?      @relation("TaskAccepted", fields: [taskerId], references: [id])
+
+  ownerId     String
+  taskerId      String?
+
+  status TaskStatus @default(OPEN)
+
+  @@index([taskerId])
+  @@index([ownerId])
+  @@index([status])
+
+}
+
+model Proposal {
+  title     String
+  body      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  taskId    String
+  userId    String
+
+  @@id([taskId, userId])
+}
