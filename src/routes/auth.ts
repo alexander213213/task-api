@@ -3,6 +3,7 @@ import express, { Request, Response } from "express"
 import { compare, hash } from "bcrypt"
 import z from "zod"
 import { prisma } from "../services/db"
+import { authorizeUser } from "../middlewares/authorize"
 
 const router = express.Router()
 
@@ -104,7 +105,7 @@ router.post("/login", async (req: Request, res: Response) => {
     res.cookie("refresh_token", refreshToken, {
         ...cookieBase,
         maxAge: refreshCookieTTL,
-        path: "/auth/refresh"
+        path: "/auth/"
     })
 
     res.cookie("access_token", accessToken, {
@@ -171,9 +172,42 @@ router.post("/refresh", async (req: Request, res: Response) => {
         path: "/"
     })
 
-    res.send("Refresh Successful")
+    res.status(200).json({ok: true, message: "Refresh Successful"})
 })
 
+router.post("/logout", authorizeUser, async (req: Request, res: Response) => {
+    const token = req.cookies?.refresh_token
+    if (!token) {
+        res.clearCookie("refresh_token", {path: "/auth/"})
+        res.clearCookie("access_token", {path: "/"})
+        return res.status(200).json({ok: true, message: "Logout Successful"})
+    }
+    
+    const userId = res.locals.userId
+    
+    const tokens = await prisma.refreshToken.findMany({
+        where: {
+            userId
+        }
+    })
+    
+    for (const t of tokens) {
+        if (await compare(token, t.tokenHash)) {
+            await prisma.refreshToken.delete({
+                where: {
+                    id: t.id
+                }
+            })
+            break
+        }
+    }
+    
+    
+    res.clearCookie("refresh_token", {path: "/auth/"})
+    res.clearCookie("access_token", {path: "/"})
+    
+    return res.status(200).json({ok: true, message: "Logout Successful"})
+})
 
 function generateAccessToken(user: { userId: string }) {
     return sign(user, accessTokenSecret, { expiresIn: accessTokenTTL })
