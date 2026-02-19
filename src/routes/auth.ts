@@ -1,14 +1,25 @@
-import {sign} from "jsonwebtoken"
-import express, {Express, Request, Response} from "express"
+import { sign, verify } from "jsonwebtoken"
+import express, { Request, Response } from "express"
 import { compare, hash } from "bcrypt"
-
-import type { User } from "../../generated/prisma/client"
-import z, { jwt } from "zod"
+import "dotenv/config"
+import z from "zod"
 import { prisma } from "../services/db"
 
 const router = express.Router()
 
+const accessTokenSecret = process.env.ACCESS_TOKEN_SECRET!
+const refreshTokenSecret = process.env.REFRESH_TOKEN_SECRET!
+const accessTokenTTL = 60 * 15
+const accessCookieTTL = 1000 * 60 * 15
+const refreshTokenTTL = 60 * 60 * 24 * 7
+const refreshCookieTTL = 1000 * 60 * 60 * 24 * 7
+const isProd = process.env.NODE_ENV === "production"
 
+const cookieBase = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: "lax" as const,
+}
 
 const registrationSchema = z.object({
     username: z.string(),
@@ -20,10 +31,25 @@ const registrationSchema = z.object({
 
 })
 
+
+
+const emailSchema = z.object({
+    email: z.email().toLowerCase(),
+    password: z.string()
+})
+
+const usernameSchema = z.object({
+    username: z.string(),
+    password: z.string()
+})
+
+const loginSchema = z.union([emailSchema, usernameSchema])
+
+
 router.post("/register", async (req: Request, res: Response) => {
     const result = registrationSchema.safeParse(req.body)
     if (!result.success) {
-        return res.status(400).send("Wrong request format")
+        return res.status(400).send("Wrong registration object format")
     }
 
     const parsed = result.data
@@ -40,8 +66,117 @@ router.post("/register", async (req: Request, res: Response) => {
             passwordHash: passwordHash,
         }
     })
-    const {passwordHash: _,id: __,  ...safeUser} = user
-    res.status(201).json(safeUser)
+    res.status(201).send("Sign-up successful")
 })
 
+router.post("/login", async (req: Request, res: Response) => {
+    const result = loginSchema.safeParse(req.body)
+
+    if (!result.success) {
+        return res.status(400).send("Wrong login object format")
+    }
+
+    const data = result.data
+
+    const user = await prisma.user.findUnique({
+        where: "email" in data
+            ? { email: data.email }
+            : { username: data.username }
+    })
+
+    if (!user) {
+        return res.status(401).send("Invalid Credentials")
+    }
+
+    const ok = await compare(data.password, user.passwordHash)
+
+    if (!ok) {
+        return res.status(401).send("Invalid Credentials")
+    }
+    const accessToken = generateAccessToken({ userId: user.id })
+    const refreshToken = sign({ userId: user.id }, refreshTokenSecret, { expiresIn: refreshTokenTTL })
+    const tokenHash = await hash(refreshToken, 10)
+    await prisma.refreshToken.create({
+        data: {
+            tokenHash,
+            userId: user.id,
+        }
+    })
+    res.cookie("refresh_token", refreshToken, {
+        ...cookieBase,
+        maxAge: refreshCookieTTL,
+        path: "/auth/refresh"
+    })
+
+    res.cookie("access_token", accessToken, {
+        ...cookieBase,
+        maxAge: accessCookieTTL,
+        path: "/"
+    })
+
+    const { id: _, passwordHash: __, ...safeUser } = user
+    res.status(200).json({ ok: true, user: safeUser })
+})
+
+router.post("/refresh", async (req: Request, res: Response) => {
+
+    const token = req.cookies.refresh_token || ""
+    if (token === "") {
+        return res.status(401).send("Missing Refresh Token")
+    }
+
+    let payload: { userId: string }
+
+    try {
+        payload = verify(token, refreshTokenSecret) as { userId: string }
+    } catch {
+        return res.status(401).send("Invalid Credentials")
+    }
+
+
+    const user = await prisma.user.findUnique({
+        where: {
+            id: payload.userId
+        }
+    })
+
+    if (!user) {
+        return res.status(401).send("Invalid Credentials")
+    }
+    await prisma.refreshToken.deleteMany({
+        where: { userId: user.id, createdAt: { lt: new Date(Date.now() - refreshCookieTTL) } }
+    })
+
+    const tokens = await prisma.refreshToken.findMany({
+        where: {
+            userId: user.id
+        }
+    })
+
+    let match = false
+    for (const t of tokens) {
+        if (await compare(token, t.tokenHash)) {
+            match = true
+            break
+        }
+    }
+
+    if (!match) {
+        return res.status(401).send("Invalid Credentials")
+    }
+
+    const accessToken = generateAccessToken({ userId: user.id })
+    res.cookie("access_token", accessToken, {
+        ...cookieBase,
+        maxAge: accessCookieTTL,
+        path: "/"
+    })
+
+    res.send("Refresh Successful")
+})
+
+
+function generateAccessToken(user: { userId: string }) {
+    return sign(user, accessTokenSecret, { expiresIn: accessTokenTTL })
+}
 export default router
