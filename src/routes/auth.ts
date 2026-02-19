@@ -1,7 +1,6 @@
 import { sign, verify } from "jsonwebtoken"
 import express, { Request, Response } from "express"
 import { compare, hash } from "bcrypt"
-import "dotenv/config"
 import z from "zod"
 import { prisma } from "../services/db"
 
