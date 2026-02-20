@@ -8,7 +8,7 @@ const accessTokenSecret = process.env.ACCESS_TOKEN_SECRET!
 export function authorizeUser(req: Request, res:Response, next: NextFunction) {
     const accessToken: string | undefined= req.cookies?.access_token
     if (!accessToken) {
-        return res.status(401).send("Unauthorized")
+        return res.status(401).json({ok: false, message: "Invalid Credentials"})
     }
     
     let payload: {userId: string}
@@ -17,6 +17,6 @@ export function authorizeUser(req: Request, res:Response, next: NextFunction) {
         res.locals.userId = payload.userId
         return next()
     } catch {
-        return res.status(401).send("Unauthorized")
+        return res.status(401).json({ok: false, message: "Invalid Credentials"})
     }
 }

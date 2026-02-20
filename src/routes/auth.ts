@@ -49,7 +49,7 @@ const loginSchema = z.union([emailSchema, usernameSchema])
 router.post("/register", async (req: Request, res: Response) => {
     const result = registrationSchema.safeParse(req.body)
     if (!result.success) {
-        return res.status(400).send("Wrong registration object format")
+        return res.status(400).json({ok: false, message: "Wrong registration object format"})
     }
 
     const parsed = result.data
@@ -66,14 +66,14 @@ router.post("/register", async (req: Request, res: Response) => {
             passwordHash: passwordHash,
         }
     })
-    res.status(201).send("Sign-up successful")
+    res.status(201).json({ok: true, message: "Sign-up successful"})
 })
 
 router.post("/login", async (req: Request, res: Response) => {
     const result = loginSchema.safeParse(req.body)
 
     if (!result.success) {
-        return res.status(400).send("Wrong login object format")
+        return res.status(400).json({ok: false, message: "Wrong Login Object Format"})
     }
 
     const data = result.data
@@ -85,13 +85,13 @@ router.post("/login", async (req: Request, res: Response) => {
     })
 
     if (!user) {
-        return res.status(401).send("Invalid Credentials")
+        return res.status(401).json({ok: false, message: "Invalid Credentials"})
     }
 
     const ok = await compare(data.password, user.passwordHash)
 
     if (!ok) {
-        return res.status(401).send("Invalid Credentials")
+        return res.status(401).json({ok: false, message: "Invalid Credentials"})
     }
     const accessToken = generateAccessToken({ userId: user.id })
     const refreshToken = sign({ userId: user.id }, refreshTokenSecret, { expiresIn: refreshTokenTTL })
@@ -105,7 +105,7 @@ router.post("/login", async (req: Request, res: Response) => {
     res.cookie("refresh_token", refreshToken, {
         ...cookieBase,
         maxAge: refreshCookieTTL,
-        path: "/auth/"
+        path: "/auth"
     })
 
     res.cookie("access_token", accessToken, {
@@ -120,9 +120,9 @@ router.post("/login", async (req: Request, res: Response) => {
 
 router.post("/refresh", async (req: Request, res: Response) => {
 
-    const token = req.cookies.refresh_token || ""
-    if (token === "") {
-        return res.status(401).send("Missing Refresh Token")
+    const token: string | undefined = req.cookies?.refresh_token
+    if (!token) {
+        return res.status(401).json({ok: false, message: "Invalid Credentials"})
     }
 
     let payload: { userId: string }
@@ -130,26 +130,19 @@ router.post("/refresh", async (req: Request, res: Response) => {
     try {
         payload = verify(token, refreshTokenSecret) as { userId: string }
     } catch {
-        return res.status(401).send("Invalid Credentials")
+        return res.status(401).json({ok: false, message: "Invalid Credentials"})
     }
 
 
-    const user = await prisma.user.findUnique({
-        where: {
-            id: payload.userId
-        }
-    })
+    const userId = payload.userId
 
-    if (!user) {
-        return res.status(401).send("Invalid Credentials")
-    }
     await prisma.refreshToken.deleteMany({
-        where: { userId: user.id, createdAt: { lt: new Date(Date.now() - refreshCookieTTL) } }
+        where: { userId, createdAt: { lt: new Date(Date.now() - refreshCookieTTL) } }
     })
 
     const tokens = await prisma.refreshToken.findMany({
         where: {
-            userId: user.id
+            userId
         }
     })
 
@@ -162,10 +155,10 @@ router.post("/refresh", async (req: Request, res: Response) => {
     }
 
     if (!match) {
-        return res.status(401).send("Invalid Credentials")
+        return res.status(401).json({ok: false, message: "Invalid Credentials"})
     }
 
-    const accessToken = generateAccessToken({ userId: user.id })
+    const accessToken = generateAccessToken({ userId })
     res.cookie("access_token", accessToken, {
         ...cookieBase,
         maxAge: accessCookieTTL,
@@ -176,14 +169,14 @@ router.post("/refresh", async (req: Request, res: Response) => {
 })
 
 router.post("/logout", authorizeUser, async (req: Request, res: Response) => {
-    const token = req.cookies?.refresh_token
+    const token: string | undefined = req.cookies?.refresh_token
     if (!token) {
-        res.clearCookie("refresh_token", {path: "/auth/"})
+        res.clearCookie("refresh_token", {path: "/auth"})
         res.clearCookie("access_token", {path: "/"})
         return res.status(200).json({ok: true, message: "Logout Successful"})
     }
     
-    const userId = res.locals.userId
+    const userId = res.locals.userId as string
     
     const tokens = await prisma.refreshToken.findMany({
         where: {
@@ -203,9 +196,9 @@ router.post("/logout", authorizeUser, async (req: Request, res: Response) => {
     }
     
     
-    res.clearCookie("refresh_token", {path: "/auth/"})
+    res.clearCookie("refresh_token", {path: "/auth"})
     res.clearCookie("access_token", {path: "/"})
-    
+
     return res.status(200).json({ok: true, message: "Logout Successful"})
 })
 
