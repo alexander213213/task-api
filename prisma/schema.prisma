@@ -14,58 +14,71 @@ enum TaskStatus {
 }
 
 model User {
-  id           String     @id @default(cuid())
-  username     String     @unique
-  email        String     @unique
+  id           String  @id @default(cuid())
+  username     String  @unique
+  email        String  @unique
   firstName    String
   lastName     String
   middleName   String?
   passwordHash String
 
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  proposals    Proposal[]
-  tasksPosted  Task[]     @relation("TaskPosted")
-  taskAccepted Task[]     @relation("TaskAccepted")
+  proposals     Proposal[]
+  tasksPosted   Task[]         @relation("TaskPosted")
+  taskAccepted  Task[]         @relation("TaskAccepted")
+  refreshTokens RefreshToken[]
 }
 
 model Task {
-  id          String     @id @default(cuid())
+  id          String  @id @default(cuid())
   title       String
   description String?
   reward      Decimal
 
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  proposals   Proposal[]
-  owner       User       @relation("TaskPosted", fields: [ownerId], references: [id], onDelete: Cascade)
-  tasker      User?      @relation("TaskAccepted", fields: [taskerId], references: [id])
+  proposals Proposal[]
+  owner     User       @relation("TaskPosted", fields: [ownerId], references: [id], onDelete: Cascade)
+  tasker    User?      @relation("TaskAccepted", fields: [taskerId], references: [id])
 
-  ownerId     String
-  taskerId      String?
+  ownerId  String
+  taskerId String?
 
   status TaskStatus @default(OPEN)
 
   @@index([taskerId])
   @@index([ownerId])
   @@index([status])
-
 }
 
 model Proposal {
-  title     String
-  body      String
+  title String
+  body  String
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  taskId    String
-  userId    String
+  taskId String
+  userId String
 
   @@id([taskId, userId])
+}
+
+model RefreshToken {
+  id        String @id @default(cuid())
+  tokenHash String
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  userId String
+
+  @@index([userId])
 }
