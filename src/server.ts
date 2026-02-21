@@ -1,6 +1,6 @@
 import { errorHandler } from "./middlewares/error";
-import { prisma } from "./services/db";
-import express, { Express, Request, Response } from "express";
+import express from "express";
+import 'dotenv/config'
 import authRouter from "./routes/auth"
 import cookieParser from "cookie-parser"
 
