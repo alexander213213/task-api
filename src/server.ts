@@ -7,8 +7,8 @@ import cookieParser from "cookie-parser"
 const app = express()
 
 app.use(express.json())
-app.use(errorHandler)
 app.use(cookieParser())
 app.use("/auth", authRouter)
+app.use(errorHandler)
 
 export default app
