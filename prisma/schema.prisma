@@ -26,8 +26,8 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  ratingAvg   Float  @default(0)
-  ratingCount BigInt @default(0)
+  ratingAvg   Float @default(0)
+  ratingCount Int   @default(0)
 
   proposals       Proposal[]
   tasksPosted     Task[]         @relation("TaskPosted")
@@ -53,7 +53,7 @@ model Task {
   proposals Proposal[]
   owner     User       @relation("TaskPosted", fields: [ownerId], references: [id], onDelete: Cascade)
   tasker    User?      @relation("TaskAccepted", fields: [taskerId], references: [id])
-  review   Review?
+  review    Review?
 
   status TaskStatus @default(OPEN)
 
