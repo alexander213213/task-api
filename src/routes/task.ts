@@ -12,6 +12,7 @@ const taskRequestSchema = z.object({
     deadline: z.iso.datetime(),
 })
 
+
 router.post("", authorizeUser, async (req: Request, res: Response) => {
     const result = taskRequestSchema.safeParse(req.body)
     if (!result.success) {
@@ -42,4 +43,20 @@ router.post("", authorizeUser, async (req: Request, res: Response) => {
     res.status(200).json({ok: true, message: "Task Created Successfully"})
 })
 
+router.get("/:id", authorizeUser, async (req: Request, res: Response) => {
+
+    const task = await prisma.task.findUnique({where: {id: req.params.id as string}})
+
+    if (!task) {
+        res.status(404).json({ok: false, message: "Task Not Found"})
+    }
+    
+    res.status(200).json({ok: true, task})
+    
+})
+
+function isNumber(value: string): boolean {
+    if (value.trim() === "") return false
+    return !Number.isNaN(Number(value.trim()))
+}
 export default router
