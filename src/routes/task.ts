@@ -60,6 +60,8 @@
 
         const query = parseResult.data
 
+        const limit = Math.min(100, Math.max(1, query.limit ?? 20))
+
         let orderBy: Prisma.TaskOrderByWithRelationInput[] = []
 
         switch (query.sortBy) {
@@ -89,7 +91,7 @@
             where: {
                 status: "OPEN"
             },
-            take: Math.min(100, Math.max(1, query.limit ?? 20)),
+            take: limit + 1,
             ...(query.cursor
                 ? {cursor: {id: query.cursor}, skip: 1}
                 : {}
@@ -100,9 +102,19 @@
             return res.status(204).json({ok: true, tasks: []})
         }
 
-        const tasksBasicInfo = tasks.map(({taskerId, updatedAt, ...safeTask}) => safeTask)
+        const hasNextPage = tasks.length > limit
+        const page = hasNextPage ? tasks.slice(0, limit) : tasks
+        const nextCursor = hasNextPage ? page[page.length - 1]!.id : null
+        
 
-        return res.status(200).json({ok: true, tasks: tasksBasicInfo})
+        const tasksBasicInfo = page.map(({taskerId, updatedAt, ...safeTask}) => safeTask)
+
+        return res.status(200).json({
+            ok: true,
+            tasks: tasksBasicInfo,
+            nextCursor,
+            hasNextPage
+        })
     })
 
     router.get("/:id", authorizeUser, async (req: Request, res: Response) => {
