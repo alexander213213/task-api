@@ -3,6 +3,7 @@ import z from "zod"
 import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
 import { assertNever } from "../services/assertNever"
+import { Prisma } from "../../generated/prisma/client"
 
 const router = Router()
 
@@ -59,25 +60,49 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
 
     const query = parseResult.data
 
-    let orderb = []
+    let orderBy: Prisma.TaskOrderByWithRelationInput[] = []
 
     switch (query.sortBy) {
         case "newest":
+            orderBy = [
+                {id: "desc"},
+                {createdAt: "desc"}
+            ]
+            break
         case "reward_desc":
+            orderBy = [
+                {id: "desc"},
+                {reward: "desc"}
+            ]
+            break
         case "deadline_soon":
+            orderBy = [
+                {id: "asc"},
+                {deadline: "asc"}
+            ]
+            break
         default:
             assertNever(query.sortBy)
     }
     
     const tasks = await prisma.task.findMany({
-        take: query.limit ?? 20,
+        where: {
+            status: "OPEN"
+        },
+        take: Math.min(100, Math.max(1, query.limit ?? 20)),
         ...(query.cursor
             ? {cursor: {id: query.cursor}, skip: 1}
             : {}
         ),
-        orderBy: []
+        orderBy
     })
+    if (!tasks) {
+        return res.status(204).json({ok: true, tasks: []})
+    }
 
+    const tasksBasicInfo = tasks.map(({taskerId, updatedAt, ...safeTask}) => safeTask)
+
+    return res.status(200).json({ok: true, tasks: tasksBasicInfo})
 })
 
 router.get("/:id", authorizeUser, async (req: Request, res: Response) => {
