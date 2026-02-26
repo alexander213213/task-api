@@ -1,8 +1,12 @@
 {
+  "prisma": {
+    "seed": "tsx prisma/seed.ts" 
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/src/index.js",
+    "db:seed": "prisma db seed",
     "test": "vitest"
   },
   "dependencies": {
@@ -17,6 +21,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@faker-js/faker": "^10.3.0",
     "@types/bcrypt": "^6.0.0",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
