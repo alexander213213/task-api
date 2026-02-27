@@ -17,7 +17,7 @@ const taskRequestSchema = z.object({
 const getTaskParamSchema = z.object({
     cursor: z.string().optional(),
     limit: z.coerce.number().optional(),
-    sortBy: z.enum(["newest", "reward_desc", "deadline_soon"])
+    sort_by: z.enum(["newest", "reward_desc", "deadline_soon"])
 })
 
 
@@ -64,7 +64,7 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
 
     let orderBy: Prisma.TaskOrderByWithRelationInput[] = []
 
-    switch (query.sortBy) {
+    switch (query.sort_by) {
         case "newest":
             orderBy = [
                 { createdAt: "desc" },
@@ -84,7 +84,7 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
             ]
             break
         default:
-            assertNever(query.sortBy)
+            assertNever(query.sort_by)
     }
 
     const tasks = await prisma.task.findMany({
