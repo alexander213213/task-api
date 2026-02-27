@@ -3,13 +3,13 @@ import z from "zod"
 import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
 import { assertNever } from "../services/assertNever"
-import { Prisma } from "../../generated/prisma/client"
+import { Prisma, Task } from "../../generated/prisma/client"
 
 const router = Router()
 
 const taskRequestSchema = z.object({
-    title: z.string(),
-    description: z.string().optional(),
+    title: z.string().min(1).max(200),
+    description: z.string().max(2000).optional(),
     reward: z.number(),
     deadline: z.iso.datetime(),
 })
@@ -19,6 +19,17 @@ const getTaskParamSchema = z.object({
     limit: z.coerce.number().optional(),
     sort_by: z.enum(["newest", "reward_desc", "deadline_soon"])
 })
+const patchSchema = z.discriminatedUnion("op", [
+  z.object({
+    op: z.literal("replace"),
+    path: z.enum(["/title", "/deadline", "/description", "/reward"]),
+    value: z.unknown(),
+  }),
+  z.object({
+    op: z.literal("remove"),
+    path: z.literal("/description"),
+  }),
+]);
 
 
 router.post("", authorizeUser, async (req: Request, res: Response) => {
@@ -34,7 +45,7 @@ router.post("", authorizeUser, async (req: Request, res: Response) => {
     })
 
     if (!user) {
-        res.status(401).jsonp({ ok: false, message: "Invalid Credentials" })
+        return res.status(401).json({ ok: false, message: "Invalid Credentials" })
     }
 
     const tx = result.data
@@ -42,7 +53,7 @@ router.post("", authorizeUser, async (req: Request, res: Response) => {
         data: {
             title: tx.title,
             description: tx.description ?? null,
-            reward: tx.reward,
+            reward: new Prisma.Decimal(tx.reward),
             deadline: tx.deadline,
             ownerId: res.locals.userId as string
         }
@@ -122,12 +133,69 @@ router.get("/:id", authorizeUser, async (req: Request, res: Response) => {
     const task = await prisma.task.findUnique({ where: { id: req.params.id as string } })
 
     if (!task) {
-        res.status(404).json({ ok: false, message: "Task Not Found" })
+        return res.status(404).json({ ok: false, message: "Task Not Found" })
     }
 
     res.status(200).json({ ok: true, task })
 
 })
+
+router.patch("/:id", authorizeUser, async (req, res) => {
+  const parsed = patchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, message: "Wrong Patch Body Format" });
+  }
+
+  const id = req.params.id;
+  const userId = res.locals.userId as string;
+
+  const task = await prisma.task.findUnique({ where: { id: res.locals.userId as string } });
+  if (!task) return res.status(404).json({ ok: false, message: "Task Not Found" });
+  if (task.ownerId !== userId) return res.status(403).json({ ok: false, message: "Update Forbidden" });
+
+  const data: Prisma.TaskUpdateInput = {};
+
+  if (parsed.data.op === "remove") {
+    data.description = null;
+  } else {
+    const { path, value } = parsed.data;
+
+    if (path === "/title") {
+      const v = z.string().min(1).max(200).safeParse(value);
+      if (!v.success) return res.status(400).json({ ok: false, message: "Invalid title" });
+      data.title = v.data;
+    }
+
+    if (path === "/description") {
+      const v = z.string().max(2000).nullable().safeParse(value);
+      if (!v.success) return res.status(400).json({ ok: false, message: "Invalid description" });
+      data.description = v.data;
+    }
+
+    if (path === "/deadline") {
+      const v = z.iso.datetime().safeParse(value);
+      if (!v.success) return res.status(400).json({ ok: false, message: "Invalid deadline" });
+      data.deadline = new Date(v.data);
+    }
+
+    if (path === "/reward") {
+      const v = z.union([z.number(), z.string()]).safeParse(value);
+      if (!v.success) return res.status(400).json({ ok: false, message: "Invalid reward" });
+
+      const n = typeof v.data === "string" ? Number(v.data) : v.data;
+      if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ ok: false, message: "Invalid reward" });
+
+      data.reward = new Prisma.Decimal(n);
+    }
+  }
+
+  const updated = await prisma.task.update({
+    where: { id: res.locals.userId as string },
+    data,
+  });
+
+  return res.status(200).json({ ok: true, task: updated });
+});
 
 function isNumber(value: string): boolean {
     if (value.trim() === "") return false
