@@ -19,7 +19,7 @@ const getTaskParamSchema = z.object({
     limit: z.coerce.number().optional(),
     sort_by: z.enum(["newest", "reward_desc", "deadline_soon"])
 })
-const patchSchema = z.discriminatedUnion("op", [
+const taskPatchSchema = z.discriminatedUnion("op", [
   z.object({
     op: z.literal("replace"),
     path: z.enum(["/title", "/deadline", "/description", "/reward"]),
@@ -30,6 +30,11 @@ const patchSchema = z.discriminatedUnion("op", [
     path: z.literal("/description"),
   }),
 ]);
+
+const proposalSchema = z.object({
+    title: z.string().min(1).max(200),
+    body: z.string().min(0).max(2000)
+})
 
 
 router.post("", authorizeUser, async (req: Request, res: Response) => {
@@ -141,7 +146,7 @@ router.get("/:taskId", authorizeUser, async (req: Request, res: Response) => {
 })
 
 router.patch("/:taskId", authorizeUser, async (req: Request, res: Response) => {
-  const parsed = patchSchema.safeParse(req.body);
+  const parsed = taskPatchSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ ok: false, message: "Wrong Patch Body Format" });
   }
@@ -206,6 +211,28 @@ router.delete("/:taskId", authorizeUser, async (req: Request, res: Response) => 
 
     return res.status(200).json({ok: true, task: deletedTask})
 })
+
+router.post("/:taskId/proposals", authorizeUser, async (req: Request, res: Response) => {
+    const task = await prisma.task.findUnique({where: {id: req.params.taskId as string}})
+    if (!task) return res.status(404).json({ok: false, message: "Task Not Found"})
+    if (task.ownerId == res.locals.userId) return res.status(403).json({ok: false, message: "Proposal Forbidden"})
+    
+    const result = proposalSchema.safeParse(req.body)
+    if (!result.success) return res.status(400).json({ok: false, message: "Invalid Request Body"})
+    const proposal = result.data
+
+    const createdProposal = await prisma.proposal.create({
+        data: {
+            title: proposal.title,
+            body: proposal.body,
+            taskId: task.id,
+            userId: res.locals.userId as string
+        }
+    })
+
+    return res.status(200).json({ok: true, proposal: createdProposal})
+})
+
 
 function isNumber(value: string): boolean {
     if (value.trim() === "") return false
