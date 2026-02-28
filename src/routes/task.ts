@@ -272,6 +272,24 @@ router.get("/:taskId/proposals", authorizeUser, async (req: Request, res: Respon
     return res.status(200).json({ok: true, proposals})
 })
 
+router.post("/:taskId/assign", async (req: Request, res: Response) => {
+    const task = await prisma.task.findUnique({where: {id: req.params.taskId as string}})
+    if (!task) return res.status(404).json({ok: false, message: "Task Not Found"})
+    if (task.ownerId !== res.locals.userId || task.status !== "OPEN" || task.taskerId) return res.status(403).json({ok: false, message: "Forbidden"})
+    const result = z.object({userId: z.string()}).safeParse(req.body)
+    if (!result.success) return res.status(400).json({ ok: false, message: "Wrong body format" })
+    
+    const taskerId = result.data.userId
+    const proposals = await prisma.proposal.findMany({where: {taskId: task.id, userId: taskerId}})
+    if (proposals.length === 0) return res.status(403).json({ok: false, message: "Assignment Forbidden"})
+    
+    const newTask = await prisma.task.update({
+        where: {id: task.id},
+        data: {taskerId, status: "ASSIGNED"}
+    })
+    return res.status(200).json({ok: true, message: "Assignment Successful", task: newTask})
+})
+
 
 function isNumber(value: string): boolean {
     if (value.trim() === "") return false
