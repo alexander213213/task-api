@@ -10,7 +10,7 @@ const app = express()
 app.use(express.json())
 app.use(cookieParser())
 app.use("/auth", authRouter)
-app.use("/task", taskRouter)
+app.use("/tasks", taskRouter)
 app.use(errorHandler)
 
 export default app
