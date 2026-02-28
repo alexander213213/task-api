@@ -233,6 +233,29 @@ router.post("/:taskId/proposals", authorizeUser, async (req: Request, res: Respo
     return res.status(200).json({ok: true, proposal: createdProposal})
 })
 
+router.get("/:taskId/proposals", authorizeUser, async (req: Request, res: Response) => {
+    const task = await prisma.task.findUnique({where: {id: req.params.taskId as string}})
+    if (!task) return res.status(404).json({ok: false, message: "Task Not Found"})
+    if (task.ownerId !== res.locals.userId) return res.status(403).json({ok: false, message: "Proposal Forbidden"})
+    
+    const proposals = await prisma.proposal.findMany({
+        where: {
+            taskId: task.id
+        },
+        include: {
+            user: {
+                select: {
+                    username: true,
+                    ratingAvg: true,
+                    ratingCount: true
+                }
+            }
+        },
+        orderBy: [{createdAt: "asc"}, {userId: "desc"}]
+    })
+    return res.status(200).json({ok: true, proposals})
+})
+
 
 function isNumber(value: string): boolean {
     if (value.trim() === "") return false
