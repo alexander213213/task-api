@@ -128,9 +128,9 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
     })
 })
 
-router.get("/:id", authorizeUser, async (req: Request, res: Response) => {
+router.get("/:taskId", authorizeUser, async (req: Request, res: Response) => {
 
-    const task = await prisma.task.findUnique({ where: { id: req.params.id as string } })
+    const task = await prisma.task.findUnique({ where: { id: req.params.taskId as string } })
 
     if (!task) {
         return res.status(404).json({ ok: false, message: "Task Not Found" })
@@ -140,13 +140,13 @@ router.get("/:id", authorizeUser, async (req: Request, res: Response) => {
 
 })
 
-router.patch("/:id", authorizeUser, async (req: Request, res: Response) => {
+router.patch("/:taskId", authorizeUser, async (req: Request, res: Response) => {
   const parsed = patchSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ ok: false, message: "Wrong Patch Body Format" });
   }
 
-  const id = req.params.id;
+  const id = req.params.taskId;
   const userId = res.locals.userId as string;
 
   const task = await prisma.task.findUnique({ where: { id: res.locals.userId as string } });
@@ -197,8 +197,8 @@ router.patch("/:id", authorizeUser, async (req: Request, res: Response) => {
   return res.status(200).json({ ok: true, task: updated });
 });
 
-router.delete("/:id", authorizeUser, async (req: Request, res: Response) => {
-    const task = await prisma.task.findUnique({where: {id: req.params.id as string}})
+router.delete("/:taskId", authorizeUser, async (req: Request, res: Response) => {
+    const task = await prisma.task.findUnique({where: {id: req.params.taskId as string}})
 
     if (!task) return res.status(404).json({ok: false, message: "Task Not Found"})
     if (task.ownerId !== res.locals.userId) return res.status(403).json({ok: false, message: "Delete Forbidden"})
