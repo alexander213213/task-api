@@ -112,6 +112,13 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
             ? { cursor: { id: query.cursor }, skip: 1 }
             : {}
         ),
+        include: {
+            owner: {
+                select: {
+                    username: true
+                }
+            }
+        },
         orderBy
     })
     if (!tasks) {
@@ -124,13 +131,22 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
 
 
     const tasksBasicInfo = page.map(({ taskerId, updatedAt, ...safeTask }) => safeTask)
-
     return res.status(200).json({
         ok: true,
         tasks: tasksBasicInfo,
         nextCursor,
         hasNextPage
     })
+})
+
+router.get("/me", authorizeUser, async (req: Request, res: Response) => {
+    const tasks = await prisma.task.findMany({
+        where: {
+            ownerId: res.locals.userId as string
+        },
+    })
+
+    return res.status(200).json({ok: true, tasks})
 })
 
 router.get("/:taskId", authorizeUser, async (req: Request, res: Response) => {
