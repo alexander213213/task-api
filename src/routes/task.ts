@@ -140,7 +140,7 @@ router.get("/:id", authorizeUser, async (req: Request, res: Response) => {
 
 })
 
-router.patch("/:id", authorizeUser, async (req, res) => {
+router.patch("/:id", authorizeUser, async (req: Request, res: Response) => {
   const parsed = patchSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ ok: false, message: "Wrong Patch Body Format" });
@@ -196,6 +196,16 @@ router.patch("/:id", authorizeUser, async (req, res) => {
 
   return res.status(200).json({ ok: true, task: updated });
 });
+
+router.delete("/:id", authorizeUser, async (req: Request, res: Response) => {
+    const task = await prisma.task.findUnique({where: {id: req.params.id as string}})
+
+    if (!task) return res.status(404).json({ok: false, message: "Task Not Found"})
+    if (task.ownerId !== res.locals.userId) return res.status(403).json({ok: false, message: "Delete Forbidden"})
+    const deletedTask = await prisma.task.delete({where: {id: task.id}})
+
+    return res.status(200).json({ok: true, task: deletedTask})
+})
 
 function isNumber(value: string): boolean {
     if (value.trim() === "") return false
