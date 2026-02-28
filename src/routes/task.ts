@@ -290,6 +290,17 @@ router.post("/:taskId/assign", async (req: Request, res: Response) => {
     return res.status(200).json({ok: true, message: "Assignment Successful", task: newTask})
 })
 
+router.post("/:taskId/submit", async (req: Request, res: Response) => {
+    const task = await prisma.task.findUnique({where: {id: req.params.taskId as string}})
+    if (!task) return res.status(404).json({ok: false, message: "Task Not Found"})
+    if (task.taskerId !== res.locals.userId || task.status !== "ASSIGNED") return res.status(403).json({ok: false, message: "Forbidden"})
+
+    const newTask = await prisma.task.update({
+        where: {id: task.id},
+        data: {status: "SUBMITTED"}
+    })
+})
+
 
 function isNumber(value: string): boolean {
     if (value.trim() === "") return false
