@@ -299,6 +299,20 @@ router.post("/:taskId/submit", async (req: Request, res: Response) => {
         where: {id: task.id},
         data: {status: "SUBMITTED"}
     })
+    return res.status(200).json({ok: true, message: "Submission Successful", task: newTask})
+})
+
+router.post("/:taskId/confirm", async (req: Request, res: Response) => {
+    const task = await prisma.task.findUnique({where: {id: req.params.taskId as string}})
+    if (!task) return res.status(404).json({ok: false, message: "Task Not Found"})
+    if (task.ownerId !== res.locals.userId || task.status !== "SUBMITTED") return res.status(403).json({ok: false, message: "Forbidden"})
+
+    const newTask = await prisma.task.update({
+        where: {id: task.id},
+        data: {status: "COMPLETED"}
+    })
+    
+    return res.status(200).json({ok: true, message: "Confirmation Successful", task: newTask})
 })
 
 
