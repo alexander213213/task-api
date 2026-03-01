@@ -315,6 +315,84 @@ router.post("/:taskId/confirm", authorizeUser, async (req: Request, res: Respons
     return res.status(200).json({ok: true, message: "Confirmation Successful", task: newTask})
 })
 
+router.post("/:taskId/review", authorizeUser, async (req: Request, res: Response) => {
+    const body = z.object({
+      stars: z.number().int().min(1).max(5),
+      comment: z.string().min(1).max(1000),
+    }).safeParse(req.body);
+
+  if (!body.success) {
+    return res.status(400).json({ ok: false, message: "Wrong Body Format" });
+  }
+
+  const userId = res.locals.userId as string;
+  const taskId = req.params.taskId as string;
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const task = await tx.task.findUnique({
+        where: { id: taskId },
+        select: {
+          id: true,
+          ownerId: true,
+          status: true,
+          taskerId: true,
+        },
+      });
+
+      if (!task) {
+        return { status: 404 as const, body: { ok: false, message: "Task Not Found" } };
+      }
+
+      if (
+        task.ownerId !== userId ||
+        task.status !== "COMPLETED" ||
+        !task.taskerId
+      ) {
+        return { status: 403 as const, body: { ok: false, message: "Forbidden" } };
+      }
+
+      await tx.review.create({
+        data: {
+          taskId: task.id,
+          reviewerId: task.ownerId,
+          revieweeId: task.taskerId,
+          stars: body.data.stars,
+          comment: body.data.comment,
+        },
+      });
+
+      const tasker = await tx.user.findUnique({
+        where: { id: task.taskerId },
+        select: { id: true, ratingAvg: true, ratingCount: true },
+      });
+
+      if (!tasker) {
+        throw new Error("Tasker not found");
+      }
+
+      const newCount = tasker.ratingCount + 1;
+      const newAvg =
+        (tasker.ratingAvg * tasker.ratingCount + body.data.stars) / newCount;
+
+      const updatedTasker = await tx.user.update({
+        where: { id: tasker.id },
+        data: { ratingAvg: newAvg, ratingCount: newCount },
+        select: { id: true, username: true, ratingAvg: true, ratingCount: true },
+      });
+
+      return { status: 200 as const, body: { ok: true, tasker: updatedTasker } };
+    });
+
+    return res.status(result.status).json(result.body);
+  } catch (e: any) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      return res.status(409).json({ ok: false, message: "Review already exists" });
+    }
+    console.error(e);
+    return res.status(500).json({ ok: false, message: "Server Error" });
+  }
+})
 
 function isNumber(value: string): boolean {
     if (value.trim() === "") return false
