@@ -11,7 +11,7 @@ const taskRequestSchema = z.object({
     title: z.string().min(1).max(200),
     description: z.string().max(2000).optional(),
     reward: z.number(),
-    deadline: z.iso.datetime(),
+    deadline: z.coerce.date().min(new Date()),
 })
 
 const getTaskParamSchema = z.object({
@@ -105,7 +105,8 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
 
     const tasks = await prisma.task.findMany({
         where: {
-            status: "OPEN"
+            status: "OPEN",
+            deadline: {gt: new Date()}
         },
         take: limit + 1,
         ...(query.cursor
@@ -121,9 +122,6 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
         },
         orderBy
     })
-    if (!tasks) {
-        return res.status(204).json({ ok: true, tasks: [] })
-    }
 
     const hasNextPage = tasks.length > limit
     const page = hasNextPage ? tasks.slice(0, limit) : tasks
@@ -167,10 +165,10 @@ router.patch("/:taskId", authorizeUser, async (req: Request, res: Response) => {
         return res.status(400).json({ ok: false, message: "Wrong Patch Body Format" });
     }
 
-    const id = req.params.taskId;
+    const id = req.params.taskId as string;
     const userId = res.locals.userId as string;
 
-    const task = await prisma.task.findUnique({ where: { id: res.locals.userId as string } });
+    const task = await prisma.task.findUnique({ where: { id } });
     if (!task) return res.status(404).json({ ok: false, message: "Task Not Found" });
     if (task.ownerId !== userId) return res.status(403).json({ ok: false, message: "Update Forbidden" });
 
@@ -194,7 +192,7 @@ router.patch("/:taskId", authorizeUser, async (req: Request, res: Response) => {
         }
 
         if (path === "/deadline") {
-            const v = z.iso.datetime().safeParse(value);
+            const v = z.coerce.date().min(new Date()).safeParse(value);
             if (!v.success) return res.status(400).json({ ok: false, message: "Invalid deadline" });
             data.deadline = new Date(v.data);
         }
@@ -422,8 +420,8 @@ router.post("/:taskId/confirm", authorizeUser, async (req: Request, res: Respons
     const taskId = req.params.taskId as string
     const userId = res.locals.userId as string
     const newTask = await prisma.task.updateMany({
-        where: { id: taskId, ownerId: userId, status: "ASSIGNED" },
-        data: { status: "SUBMITTED" }
+        where: { id: taskId, ownerId: userId, status: "SUBMITTED" },
+        data: { status: "COMPLETED" }
     })
     if (newTask.count === 0) {
         const exists = await prisma.task.findUnique({
@@ -447,7 +445,7 @@ router.post("/:taskId/confirm", authorizeUser, async (req: Request, res: Respons
         }
     })
     if (!task) return res.status(404).json({ ok: false, message: "Task Not Found" })
-    return res.status(200).json({ ok: true, message: "Submission Successful", task })
+    return res.status(200).json({ ok: true, message: "Confirmation Successful", task })
 })
 
 router.post("/:taskId/review", authorizeUser, async (req: Request, res: Response) => {
@@ -527,6 +525,20 @@ router.post("/:taskId/review", authorizeUser, async (req: Request, res: Response
         console.error(e);
         return res.status(500).json({ ok: false, message: "Server Error" });
     }
+})
+
+router.post("/:taskId/cancel", authorizeUser, async (req: Request, res: Response) => {
+    const taskId = req.params.taskId as string
+    const userId = res.locals.userId as string
+
+    const tasks = await prisma.task.updateManyAndReturn({
+        where: {id: taskId, ownerId: userId, status: "OPEN"},
+        data: {status: "CANCELLED"}
+    })
+    if (tasks.length === 0) {
+        return res.status(404).json({ok: false, message: "Task Not Found"})
+    }
+    return res.status(200).json({ok: true, message: "Task Cancelled Successfully", task: tasks[0]})
 })
 
 function isNumber(value: string): boolean {
