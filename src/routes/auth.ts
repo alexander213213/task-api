@@ -18,7 +18,7 @@ const isProd = process.env.NODE_ENV === "production"
 const cookieBase = {
     httpOnly: true,
     secure: isProd,
-    sameSite: "lax" as const,
+    sameSite: isProd? "none" as const : "lax" as const,
 }
 
 const registrationSchema = z.object({
