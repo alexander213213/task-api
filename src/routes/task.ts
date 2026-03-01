@@ -536,9 +536,59 @@ router.post("/:taskId/cancel", authorizeUser, async (req: Request, res: Response
         data: {status: "CANCELLED"}
     })
     if (tasks.length === 0) {
-        return res.status(404).json({ok: false, message: "Task Not Found"})
+        const task = await prisma.task.findUnique({
+            where: {id: taskId},
+            select: {ownerId: true, status: true}
+        })
+        if (!task) {
+            return res.status(404).json({ok: false, message: "Task Not Found"})
+        }
+        if (task.ownerId !== userId) {
+            return res.status(403).json({ok: false, message: "Forbidden"})
+        }
+        
+        if (task.status !== "OPEN") {
+            return res.status(409).json({ok: false, message: "Task Is Not Open"})
+        }
+        return res.status(409).json({ ok: false, message: "Task could not be cancelled" });
     }
+
     return res.status(200).json({ok: true, message: "Task Cancelled Successfully", task: tasks[0]})
+})
+
+router.post("/:taskId/unassign", authorizeUser, async (req: Request, res: Response) => {
+    const taskId = req.params.taskId as string
+    const userId = res.locals.userId as string
+
+    const tasks = await prisma.task.updateManyAndReturn({
+        where: {
+            id: taskId,
+            ownerId: userId,
+            OR: [
+                {status: "ASSIGNED"},
+                {status: "SUBMITTED"}
+            ]
+        },
+        data: {status: "OPEN", taskerId: null}
+    })
+    if (tasks.length === 0) {
+        const task = await prisma.task.findUnique({
+            where: {id: taskId},
+            select: {ownerId: true, status: true}
+        })
+        if (!task) {
+            return res.status(404).json({ok: false, message: "Task Not Found"})
+        }
+        if (task.ownerId !== userId) {
+            return res.status(403).json({ok: false, message: "Forbidden"})
+        }
+        
+        if (task.status !== "ASSIGNED" && task.status !== "SUBMITTED" ) {
+            return res.status(409).json({ok: false, message: "Task is not assigned or submitten"})
+        }
+        return res.status(409).json({ ok: false, message: "Task could not be unassigned" });
+    }
+    return res.status(200).json({ok: true, message: "Task Unassigned Successfully", task: tasks[0]})
 })
 
 function isNumber(value: string): boolean {
