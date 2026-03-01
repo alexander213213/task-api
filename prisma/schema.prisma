@@ -10,7 +10,9 @@ datasource db {
 enum TaskStatus {
   OPEN
   ASSIGNED
+  SUBMITTED
   COMPLETED
+  CANCELLED
 }
 
 model User {
@@ -25,10 +27,15 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  proposals     Proposal[]
-  tasksPosted   Task[]         @relation("TaskPosted")
-  taskAccepted  Task[]         @relation("TaskAccepted")
-  refreshTokens RefreshToken[]
+  ratingAvg   Float @default(0)
+  ratingCount Int   @default(0)
+
+  proposals       Proposal[]
+  tasksPosted     Task[]         @relation("TaskPosted")
+  taskAccepted    Task[]         @relation("TaskAccepted")
+  refreshTokens   RefreshToken[]
+  reviewsWritten  Review[]       @relation("ReviewsWritten")
+  reviewsReceived Review[]       @relation("ReviewsReceived")
 }
 
 model Task {
@@ -38,14 +45,16 @@ model Task {
   reward      Decimal
 
   createdAt DateTime @default(now())
+  deadline  DateTime
   updatedAt DateTime @updatedAt
+
+  ownerId  String
+  taskerId String?
 
   proposals Proposal[]
   owner     User       @relation("TaskPosted", fields: [ownerId], references: [id], onDelete: Cascade)
   tasker    User?      @relation("TaskAccepted", fields: [taskerId], references: [id])
-
-  ownerId  String
-  taskerId String?
+  review    Review?
 
   status TaskStatus @default(OPEN)
 
@@ -61,13 +70,31 @@ model Proposal {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
   taskId String
   userId String
 
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@id([taskId, userId])
+}
+
+model Review {
+  id String @id @default(cuid())
+
+  stars     Int
+  comment   String
+  createdAt DateTime @default(now())
+
+  taskId     String @unique
+  reviewerId String
+  revieweeId String
+
+  task     Task @relation(fields: [taskId], references: [id])
+  reviewer User @relation("ReviewsWritten", fields: [reviewerId], references: [id])
+  reviewee User @relation("ReviewsReceived", fields: [revieweeId], references: [id])
+
+  @@index([reviewerId, revieweeId])
 }
 
 model RefreshToken {
