@@ -10,7 +10,7 @@ const app = express()
 
 const allowedOrigins = [
   "http://localhost:5173",              // local dev
-  "https://your-frontend.vercel.app",   // production
+  process.env.FRONTEND_URL as string,   // production
 ];
 
 app.use(cors({
