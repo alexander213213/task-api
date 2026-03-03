@@ -4,6 +4,7 @@ import { compare, hash } from "bcrypt"
 import z from "zod"
 import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
+import { assertNever } from "../services/assertNever"
 
 const router = express.Router()
 
@@ -200,6 +201,37 @@ router.post("/logout", authorizeUser, async (req: Request, res: Response) => {
     res.clearCookie("access_token", {path: "/"})
 
     return res.status(200).json({ok: true, message: "Logout Successful"})
+})
+
+router.get("/exist", async (req: Request, res: Response) => {
+    const queryRes = z.union([
+        z.object({email: z.email()}),
+        z.object({username: z.string().min(3)})
+    ]).safeParse(req.query)
+
+    if (!queryRes.success) {
+        return res.status(400).json({ok: false, message: "Bad Query"})
+    }
+
+    let user: {id: string} | null
+
+    const { data } = queryRes
+    if ("email" in data) {
+        user = await prisma.user.findUnique({
+            where: {email: data.email},
+            select: {id: true}
+        })
+    } else {
+        user = await prisma.user.findUnique({
+            where: {email: data.username},
+            select: {id: true}
+        })
+    }
+
+    if (!user) {
+        return res.status(200).json({ok: true, exists: false})
+    }
+    return res.status(200).json({ok: true, exists: true})
 })
 
 function generateAccessToken(user: { userId: string }) {
