@@ -223,7 +223,7 @@ router.get("/exist", async (req: Request, res: Response) => {
         })
     } else {
         user = await prisma.user.findUnique({
-            where: {email: data.username},
+            where: {username: data.username},
             select: {id: true}
         })
     }
