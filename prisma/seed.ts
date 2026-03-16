@@ -80,9 +80,9 @@ async function main() {
 
     const deadline = faker.date.soon({
       days: faker.helpers.weightedArrayElement([
-        { weight: 50, value: 3 },
-        { weight: 30, value: 7 },
-        { weight: 20, value: 14 },
+        { weight: 50, value: 30 },
+        { weight: 30, value: 80 },
+        { weight: 20, value: 200 },
       ]),
       refDate: createdAt,
     });

@@ -115,7 +115,7 @@ router.post("/login", async (req: Request, res: Response) => {
         path: "/"
     })
 
-    const { id: _, passwordHash: __, ...safeUser } = user
+    const { createdAt: _, passwordHash: __, updatedAt: ___, ...safeUser } = user
     res.status(200).json({ ok: true, user: safeUser })
 })
 
@@ -167,6 +167,33 @@ router.post("/refresh", async (req: Request, res: Response) => {
     })
 
     res.status(200).json({ok: true, message: "Refresh Successful"})
+})
+
+router.get("/me", authorizeUser, async (req: Request, res: Response) => {
+  const userId: string = res.locals.userId as string
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      username: true,
+      email: true,
+      firstName: true,
+      lastName: true,
+      middleName: true,
+      ratingAvg: true,
+      ratingCount: true
+    }
+  })
+
+  if (!user) {
+    return res.status(404).json({ ok: false, message: "User not found" })
+  }
+
+  return res.status(200).json({
+    ok: true,
+    user
+  })
 })
 
 router.post("/logout", authorizeUser, async (req: Request, res: Response) => {

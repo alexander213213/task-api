@@ -106,7 +106,10 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
     const tasks = await prisma.task.findMany({
         where: {
             status: "OPEN",
-            deadline: {gt: new Date()}
+            deadline: {gt: new Date()},
+            NOT: {
+                ownerId: res.locals.userId as string
+            }
         },
         take: limit + 1,
         ...(query.cursor
@@ -115,6 +118,11 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
         ),
         include: {
             owner: {
+                select: {
+                    username: true
+                }
+            },
+            tasker: {
                 select: {
                     username: true
                 }
@@ -142,8 +150,32 @@ router.get("/me", authorizeUser, async (req: Request, res: Response) => {
         where: {
             ownerId: res.locals.userId as string
         },
+        include: {
+            tasker: {
+                select: {
+                    username: true
+                }
+            },
+        },
+        orderBy: [{createdAt: "desc"}, {id: "desc"}]
     })
 
+    return res.status(200).json({ ok: true, tasks })
+})
+
+router.get("/assigned/me", authorizeUser, async (req: Request, res: Response) => {
+    const tasks = await prisma.task.findMany({
+        where: {
+            taskerId: res.locals.userId as string
+        },
+        include: {
+            owner: {
+                select: {
+                    username: true
+                }
+            }
+        }
+    })
     return res.status(200).json({ ok: true, tasks })
 })
 
