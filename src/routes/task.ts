@@ -3,6 +3,7 @@ import z from "zod"
 import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
 import { assertNever } from "../services/assertNever"
+import { decodeCursor, encodeCursor, keysetWhere, sortValueFor } from "../utils/cursor"
 import { Prisma, Task } from "../../generated/prisma/client"
 
 const router = Router()
@@ -17,7 +18,7 @@ const taskRequestSchema = z.object({
 const getTaskParamSchema = z.object({
     cursor: z.string().optional(),
     limit: z.coerce.number().optional(),
-    sort_by: z.enum(["newest", "reward_desc", "deadline_soon"])
+    sort_by: z.enum(["newest", "reward_desc", "deadline_soon"]).default("newest")
 })
 const taskPatchSchema = z.discriminatedUnion("op", [
     z.object({
@@ -103,19 +104,30 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
             assertNever(query.sort_by)
     }
 
+    const baseWhere: Prisma.TaskWhereInput = {
+        status: "OPEN",
+        deadline: { gt: new Date() },
+        NOT: {
+            ownerId: res.locals.userId as string
+        }
+    }
+
+    let keyset: Prisma.TaskWhereInput | undefined
+    if (query.cursor !== undefined) {
+        const decoded = decodeCursor(query.cursor)
+        if (!decoded || decoded.sort_by !== query.sort_by) {
+            return res.status(400).json({ ok: false, message: "Invalid cursor" })
+        }
+        try {
+            keyset = keysetWhere(decoded)
+        } catch {
+            return res.status(400).json({ ok: false, message: "Invalid cursor" })
+        }
+    }
+
     const tasks = await prisma.task.findMany({
-        where: {
-            status: "OPEN",
-            deadline: {gt: new Date()},
-            NOT: {
-                ownerId: res.locals.userId as string
-            }
-        },
+        where: keyset ? { AND: [baseWhere, keyset] } : baseWhere,
         take: limit + 1,
-        ...(query.cursor
-            ? { cursor: { id: query.cursor }, skip: 1 }
-            : {}
-        ),
         include: {
             owner: {
                 select: {
@@ -133,7 +145,10 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
 
     const hasNextPage = tasks.length > limit
     const page = hasNextPage ? tasks.slice(0, limit) : tasks
-    const nextCursor = hasNextPage ? page[page.length - 1]!.id : null
+    const last = page[page.length - 1]
+    const nextCursor = hasNextPage && last
+        ? encodeCursor(query.sort_by, sortValueFor(query.sort_by, last), last.id)
+        : null
 
 
     const tasksBasicInfo = page.map(({ taskerId, updatedAt, ...safeTask }) => safeTask)
