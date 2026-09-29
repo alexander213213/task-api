@@ -218,6 +218,9 @@ router.patch("/:taskId", authorizeUser, async (req: Request, res: Response) => {
     const task = await prisma.task.findUnique({ where: { id } });
     if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found");
     if (task.ownerId !== userId) return fail(res, 403, "FORBIDDEN", "Update Forbidden");
+    if (task.status !== "OPEN") {
+        return fail(res, 409, "CONFLICT_STATE", "Only open tasks can be updated");
+    }
 
     const data: Prisma.TaskUpdateInput = {};
 
@@ -255,12 +258,19 @@ router.patch("/:taskId", authorizeUser, async (req: Request, res: Response) => {
         }
     }
 
-    const updated = await prisma.task.update({
-        where: { id: task.id },
+    // Guarded write: re-checks ownership + OPEN status atomically so a
+    // concurrent assign/cancel wins instead of clobbering the transition.
+    const updated = await prisma.task.updateManyAndReturn({
+        where: { id: task.id, ownerId: userId, status: "OPEN" },
         data,
     });
 
-    return ok(res, { task: updated });
+    const first = updated[0];
+    if (!first) {
+        return fail(res, 409, "CONFLICT_STATE", "Task is no longer open");
+    }
+
+    return ok(res, { task: first });
 });
 
 router.delete("/:taskId", authorizeUser, async (req: Request, res: Response) => {
@@ -268,9 +278,21 @@ router.delete("/:taskId", authorizeUser, async (req: Request, res: Response) => 
 
     if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found")
     if (task.ownerId !== res.locals.userId) return fail(res, 403, "FORBIDDEN", "Delete Forbidden")
-    const deletedTask = await prisma.task.delete({ where: { id: task.id } })
-
-    return ok(res, { task: deletedTask })
+    // Only OPEN/CANCELLED tasks may be hard-deleted: assigned tasks have a
+    // tasker + proposals relying on them, and COMPLETED tasks carry reviews
+    // (no cascade) — those must go through cancel/unassign instead.
+    if (task.status !== "OPEN" && task.status !== "CANCELLED") {
+        return fail(res, 409, "CONFLICT_STATE", "Only open or cancelled tasks can be deleted")
+    }
+    try {
+        const deletedTask = await prisma.task.delete({ where: { id: task.id } })
+        return ok(res, { task: deletedTask })
+    } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && (e.code === "P2025" || e.code === "P2003")) {
+            return fail(res, 409, "CONFLICT_STATE", "Task is no longer deletable")
+        }
+        throw e
+    }
 })
 
 router.post("/:taskId/proposals", authorizeUser, async (req: Request, res: Response) => {
@@ -449,14 +471,18 @@ router.post("/:taskId/submit", authorizeUser, async (req: Request, res: Response
     if (newTask.count === 0) {
         const exists = await prisma.task.findUnique({
             where: { id: taskId },
-            select: { id: true },
+            select: { id: true, taskerId: true, status: true },
         })
 
         if (!exists) {
             return fail(res, 404, "NOT_FOUND", "Task Not Found")
         }
 
-        return fail(res, 403, "FORBIDDEN", "Forbidden")
+        if (exists.taskerId !== userId) {
+            return fail(res, 403, "FORBIDDEN", "Forbidden")
+        }
+
+        return fail(res, 409, "CONFLICT_STATE", `Task must be ASSIGNED to submit (current: ${exists.status})`)
     }
     const task = await prisma.task.findUnique({
         where: { id: taskId },
@@ -481,14 +507,18 @@ router.post("/:taskId/confirm", authorizeUser, async (req: Request, res: Respons
     if (newTask.count === 0) {
         const exists = await prisma.task.findUnique({
             where: { id: taskId },
-            select: { id: true },
+            select: { id: true, ownerId: true, status: true },
         })
 
         if (!exists) {
             return fail(res, 404, "NOT_FOUND", "Task Not Found")
         }
 
-        return fail(res, 403, "FORBIDDEN", "Forbidden")
+        if (exists.ownerId !== userId) {
+            return fail(res, 403, "FORBIDDEN", "Forbidden")
+        }
+
+        return fail(res, 409, "CONFLICT_STATE", `Task must be SUBMITTED to confirm (current: ${exists.status})`)
     }
     const task = await prisma.task.findUnique({
         where: { id: taskId },
@@ -649,8 +679,4 @@ router.post("/:taskId/unassign", authorizeUser, async (req: Request, res: Respon
     return ok(res, { task: tasks[0] }, "Task Unassigned Successfully")
 })
 
-function isNumber(value: string): boolean {
-    if (value.trim() === "") return false
-    return !Number.isNaN(Number(value.trim()))
-}
 export default router
