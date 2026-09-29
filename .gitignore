@@ -4,4 +4,5 @@ node_modules
 /dist/
 /generated/prisma
 
-/generated/prisma
+# Local planning docs (not pushed)
+/docs/
