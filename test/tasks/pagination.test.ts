@@ -2,29 +2,9 @@ import app from "../../src/server";
 import { describe, it, expect, beforeEach } from "vitest";
 import request from "supertest";
 import { resetDb } from "../helpers/db";
+import { createUser, loginCookies } from "../helpers/auth";
 import { prisma } from "../../src/services/db";
 import { Prisma } from "../../generated/prisma/client";
-import { hash } from "bcrypt";
-
-const PASSWORD = "Password123!";
-
-async function createUser(username: string, email: string) {
-    return prisma.user.create({
-        data: {
-            username,
-            email,
-            firstName: "Test",
-            lastName: "User",
-            passwordHash: await hash(PASSWORD, 4),
-        },
-    });
-}
-
-async function loginCookies(identifier: { email: string }) {
-    const res = await request(app).post("/auth/login").send({ ...identifier, password: PASSWORD });
-    expect(res.status).toBe(200);
-    return (res.headers["set-cookie"] ?? []) as string[];
-}
 
 /** 7 OPEN tasks with distinct createdAt/reward/deadline, all owned by ownerId. */
 async function seedTasks(ownerId: string) {
