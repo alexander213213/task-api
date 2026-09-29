@@ -5,6 +5,7 @@ import z from "zod"
 import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
 import { assertNever } from "../services/assertNever"
+import { fail, ok } from "../utils/respond"
 
 const router = express.Router()
 
@@ -50,7 +51,7 @@ const loginSchema = z.union([emailSchema, usernameSchema])
 router.post("/register", async (req: Request, res: Response) => {
     const result = registrationSchema.safeParse(req.body)
     if (!result.success) {
-        return res.status(400).json({ok: false, message: "Wrong registration object format"})
+        return fail(res, 400, "VALIDATION_ERROR", "Wrong registration object format", result.error.issues)
     }
 
     const parsed = result.data
@@ -67,14 +68,14 @@ router.post("/register", async (req: Request, res: Response) => {
             passwordHash: passwordHash,
         }
     })
-    res.status(201).json({ok: true, message: "Sign-up successful"})
+    return ok(res, null, "Sign-up successful", 201)
 })
 
 router.post("/login", async (req: Request, res: Response) => {
     const result = loginSchema.safeParse(req.body)
 
     if (!result.success) {
-        return res.status(400).json({ok: false, message: "Wrong Login Object Format"})
+        return fail(res, 400, "VALIDATION_ERROR", "Wrong Login Object Format", result.error.issues)
     }
 
     const data = result.data
@@ -86,13 +87,13 @@ router.post("/login", async (req: Request, res: Response) => {
     })
 
     if (!user) {
-        return res.status(401).json({ok: false, message: "Invalid Credentials"})
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
 
-    const ok = await compare(data.password, user.passwordHash)
+    const passwordOk = await compare(data.password, user.passwordHash)
 
-    if (!ok) {
-        return res.status(401).json({ok: false, message: "Invalid Credentials"})
+    if (!passwordOk) {
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
     const accessToken = generateAccessToken({ userId: user.id })
     const refreshToken = sign({ userId: user.id }, refreshTokenSecret, { expiresIn: refreshTokenTTL })
@@ -116,14 +117,14 @@ router.post("/login", async (req: Request, res: Response) => {
     })
 
     const { createdAt: _, passwordHash: __, updatedAt: ___, ...safeUser } = user
-    res.status(200).json({ ok: true, user: safeUser })
+    return ok(res, { user: safeUser })
 })
 
 router.post("/refresh", async (req: Request, res: Response) => {
 
     const token: string | undefined = req.cookies?.refresh_token
     if (!token) {
-        return res.status(401).json({ok: false, message: "Invalid Credentials"})
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
 
     let payload: { userId: string }
@@ -131,7 +132,7 @@ router.post("/refresh", async (req: Request, res: Response) => {
     try {
         payload = verify(token, refreshTokenSecret) as { userId: string }
     } catch {
-        return res.status(401).json({ok: false, message: "Invalid Credentials"})
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
 
 
@@ -156,7 +157,7 @@ router.post("/refresh", async (req: Request, res: Response) => {
     }
 
     if (!match) {
-        return res.status(401).json({ok: false, message: "Invalid Credentials"})
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
 
     const accessToken = generateAccessToken({ userId })
@@ -166,7 +167,7 @@ router.post("/refresh", async (req: Request, res: Response) => {
         path: "/"
     })
 
-    res.status(200).json({ok: true, message: "Refresh Successful"})
+    return ok(res, null, "Refresh Successful")
 })
 
 router.get("/me", authorizeUser, async (req: Request, res: Response) => {
@@ -187,13 +188,10 @@ router.get("/me", authorizeUser, async (req: Request, res: Response) => {
   })
 
   if (!user) {
-    return res.status(404).json({ ok: false, message: "User not found" })
+    return fail(res, 404, "NOT_FOUND", "User not found")
   }
 
-  return res.status(200).json({
-    ok: true,
-    user
-  })
+  return ok(res, { user })
 })
 
 router.post("/logout", authorizeUser, async (req: Request, res: Response) => {
@@ -201,7 +199,7 @@ router.post("/logout", authorizeUser, async (req: Request, res: Response) => {
     if (!token) {
         res.clearCookie("refresh_token", {path: "/auth"})
         res.clearCookie("access_token", {path: "/"})
-        return res.status(200).json({ok: true, message: "Logout Successful"})
+        return ok(res, null, "Logout Successful")
     }
     
     const userId = res.locals.userId as string
@@ -227,7 +225,7 @@ router.post("/logout", authorizeUser, async (req: Request, res: Response) => {
     res.clearCookie("refresh_token", {path: "/auth"})
     res.clearCookie("access_token", {path: "/"})
 
-    return res.status(200).json({ok: true, message: "Logout Successful"})
+    return ok(res, null, "Logout Successful")
 })
 
 router.get("/exist", async (req: Request, res: Response) => {
@@ -237,7 +235,7 @@ router.get("/exist", async (req: Request, res: Response) => {
     ]).safeParse(req.query)
 
     if (!queryRes.success) {
-        return res.status(400).json({ok: false, message: "Bad Query"})
+        return fail(res, 400, "VALIDATION_ERROR", "Bad Query", queryRes.error.issues)
     }
 
     let user: {id: string} | null
@@ -256,9 +254,9 @@ router.get("/exist", async (req: Request, res: Response) => {
     }
 
     if (!user) {
-        return res.status(200).json({ok: true, exists: false})
+        return ok(res, { exists: false })
     }
-    return res.status(200).json({ok: true, exists: true})
+    return ok(res, { exists: true })
 })
 
 function generateAccessToken(user: { userId: string }) {

@@ -3,6 +3,7 @@ import z from "zod"
 import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
 import { assertNever } from "../services/assertNever"
+import { fail, ok } from "../utils/respond"
 import { decodeCursor, encodeCursor, keysetWhere, sortValueFor } from "../utils/cursor"
 import { Prisma, Task } from "../../generated/prisma/client"
 
@@ -41,7 +42,7 @@ const proposalSchema = z.object({
 router.post("", authorizeUser, async (req: Request, res: Response) => {
     const result = taskRequestSchema.safeParse(req.body)
     if (!result.success) {
-        return res.status(400).json({ ok: false, message: "Wrong task object format" })
+        return fail(res, 400, "VALIDATION_ERROR", "Wrong task object format", result.error.issues)
     }
 
     const user = await prisma.user.findUnique({
@@ -51,11 +52,11 @@ router.post("", authorizeUser, async (req: Request, res: Response) => {
     })
 
     if (!user) {
-        return res.status(401).json({ ok: false, message: "Invalid Credentials" })
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
 
     const tx = result.data
-    await prisma.task.create({
+    const created = await prisma.task.create({
         data: {
             title: tx.title,
             description: tx.description ?? null,
@@ -65,14 +66,14 @@ router.post("", authorizeUser, async (req: Request, res: Response) => {
         }
     })
 
-    res.status(200).json({ ok: true, message: "Task Created Successfully" })
+    return ok(res, { task: created }, "Task Created Successfully", 201)
 })
 
 router.get("", authorizeUser, async (req: Request, res: Response) => {
     const parseResult = getTaskParamSchema.safeParse(req.query)
 
     if (!parseResult.success) {
-        return res.status(400).json({ ok: false, message: "Invalid Query Parameters" })
+        return fail(res, 400, "VALIDATION_ERROR", "Invalid Query Parameters", parseResult.error.issues)
     }
 
     const query = parseResult.data
@@ -116,12 +117,12 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
     if (query.cursor !== undefined) {
         const decoded = decodeCursor(query.cursor)
         if (!decoded || decoded.sort_by !== query.sort_by) {
-            return res.status(400).json({ ok: false, message: "Invalid cursor" })
+            return fail(res, 400, "VALIDATION_ERROR", "Invalid cursor")
         }
         try {
             keyset = keysetWhere(decoded)
         } catch {
-            return res.status(400).json({ ok: false, message: "Invalid cursor" })
+            return fail(res, 400, "VALIDATION_ERROR", "Invalid cursor")
         }
     }
 
@@ -152,8 +153,7 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
 
 
     const tasksBasicInfo = page.map(({ taskerId, updatedAt, ...safeTask }) => safeTask)
-    return res.status(200).json({
-        ok: true,
+    return ok(res, {
         tasks: tasksBasicInfo,
         nextCursor,
         hasNextPage
@@ -175,7 +175,7 @@ router.get("/me", authorizeUser, async (req: Request, res: Response) => {
         orderBy: [{createdAt: "desc"}, {id: "desc"}]
     })
 
-    return res.status(200).json({ ok: true, tasks })
+    return ok(res, { tasks })
 })
 
 router.get("/assigned/me", authorizeUser, async (req: Request, res: Response) => {
@@ -191,7 +191,7 @@ router.get("/assigned/me", authorizeUser, async (req: Request, res: Response) =>
             }
         }
     })
-    return res.status(200).json({ ok: true, tasks })
+    return ok(res, { tasks })
 })
 
 router.get("/:taskId", authorizeUser, async (req: Request, res: Response) => {
@@ -199,25 +199,25 @@ router.get("/:taskId", authorizeUser, async (req: Request, res: Response) => {
     const task = await prisma.task.findUnique({ where: { id: req.params.taskId as string } })
 
     if (!task) {
-        return res.status(404).json({ ok: false, message: "Task Not Found" })
+        return fail(res, 404, "NOT_FOUND", "Task Not Found")
     }
 
-    res.status(200).json({ ok: true, task })
+    return ok(res, { task })
 
 })
 
 router.patch("/:taskId", authorizeUser, async (req: Request, res: Response) => {
     const parsed = taskPatchSchema.safeParse(req.body);
     if (!parsed.success) {
-        return res.status(400).json({ ok: false, message: "Wrong Patch Body Format" });
+        return fail(res, 400, "VALIDATION_ERROR", "Wrong Patch Body Format", parsed.error.issues);
     }
 
     const id = req.params.taskId as string;
     const userId = res.locals.userId as string;
 
     const task = await prisma.task.findUnique({ where: { id } });
-    if (!task) return res.status(404).json({ ok: false, message: "Task Not Found" });
-    if (task.ownerId !== userId) return res.status(403).json({ ok: false, message: "Update Forbidden" });
+    if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found");
+    if (task.ownerId !== userId) return fail(res, 403, "FORBIDDEN", "Update Forbidden");
 
     const data: Prisma.TaskUpdateInput = {};
 
@@ -228,28 +228,28 @@ router.patch("/:taskId", authorizeUser, async (req: Request, res: Response) => {
 
         if (path === "/title") {
             const v = z.string().min(1).max(200).safeParse(value);
-            if (!v.success) return res.status(400).json({ ok: false, message: "Invalid title" });
+            if (!v.success) return fail(res, 400, "VALIDATION_ERROR", "Invalid title", v.error.issues);
             data.title = v.data;
         }
 
         if (path === "/description") {
             const v = z.string().max(2000).nullable().safeParse(value);
-            if (!v.success) return res.status(400).json({ ok: false, message: "Invalid description" });
+            if (!v.success) return fail(res, 400, "VALIDATION_ERROR", "Invalid description", v.error.issues);
             data.description = v.data;
         }
 
         if (path === "/deadline") {
             const v = z.coerce.date().min(new Date()).safeParse(value);
-            if (!v.success) return res.status(400).json({ ok: false, message: "Invalid deadline" });
+            if (!v.success) return fail(res, 400, "VALIDATION_ERROR", "Invalid deadline", v.error.issues);
             data.deadline = new Date(v.data);
         }
 
         if (path === "/reward") {
             const v = z.union([z.number(), z.string()]).safeParse(value);
-            if (!v.success) return res.status(400).json({ ok: false, message: "Invalid reward" });
+            if (!v.success) return fail(res, 400, "VALIDATION_ERROR", "Invalid reward", v.error.issues);
 
             const n = typeof v.data === "string" ? Number(v.data) : v.data;
-            if (!Number.isFinite(n) || n <= 0) return res.status(400).json({ ok: false, message: "Invalid reward" });
+            if (!Number.isFinite(n) || n <= 0) return fail(res, 400, "VALIDATION_ERROR", "Invalid reward");
 
             data.reward = new Prisma.Decimal(n);
         }
@@ -260,17 +260,17 @@ router.patch("/:taskId", authorizeUser, async (req: Request, res: Response) => {
         data,
     });
 
-    return res.status(200).json({ ok: true, task: updated });
+    return ok(res, { task: updated });
 });
 
 router.delete("/:taskId", authorizeUser, async (req: Request, res: Response) => {
     const task = await prisma.task.findUnique({ where: { id: req.params.taskId as string } })
 
-    if (!task) return res.status(404).json({ ok: false, message: "Task Not Found" })
-    if (task.ownerId !== res.locals.userId) return res.status(403).json({ ok: false, message: "Delete Forbidden" })
+    if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found")
+    if (task.ownerId !== res.locals.userId) return fail(res, 403, "FORBIDDEN", "Delete Forbidden")
     const deletedTask = await prisma.task.delete({ where: { id: task.id } })
 
-    return res.status(200).json({ ok: true, task: deletedTask })
+    return ok(res, { task: deletedTask })
 })
 
 router.post("/:taskId/proposals", authorizeUser, async (req: Request, res: Response) => {
@@ -279,7 +279,7 @@ router.post("/:taskId/proposals", authorizeUser, async (req: Request, res: Respo
 
     const parsed = proposalSchema.safeParse(req.body);
     if (!parsed.success) {
-        return res.status(400).json({ ok: false, message: "Invalid Request Body" });
+        return fail(res, 400, "VALIDATION_ERROR", "Invalid Request Body", parsed.error.issues);
     }
 
     try {
@@ -290,16 +290,16 @@ router.post("/:taskId/proposals", authorizeUser, async (req: Request, res: Respo
             });
 
             if (!task) {
-                return { status: 404 as const, body: { ok: false, message: "Task Not Found" } };
+                return { status: 404 as const, code: "NOT_FOUND" as const, body: { proposal: null }, message: "Task Not Found" };
             }
 
             if (task.ownerId === userId) {
-                return { status: 403 as const, body: { ok: false, message: "Proposal Forbidden" } };
+                return { status: 403 as const, code: "FORBIDDEN" as const, body: { proposal: null }, message: "Proposal Forbidden" };
             }
 
             // Recommended rule: only allow proposals on OPEN tasks
             if (task.status !== "OPEN") {
-                return { status: 409 as const, body: { ok: false, message: "Task is not open for proposals" } };
+                return { status: 409 as const, code: "CONFLICT_STATE" as const, body: { proposal: null }, message: "Task is not open for proposals" };
             }
 
             const createdProposal = await tx.proposal.create({
@@ -319,24 +319,27 @@ router.post("/:taskId/proposals", authorizeUser, async (req: Request, res: Respo
                 },
             });
 
-            return { status: 200 as const, body: { ok: true, proposal: createdProposal } };
+            return { status: 201 as const, code: null as null, data: { proposal: createdProposal }, message: undefined as undefined };
         });
 
-        return res.status(result.status).json(result.body);
+        if (result.status === 201) {
+            return ok(res, result.data, undefined, 201);
+        }
+        return fail(res, result.status, result.code ?? "CONFLICT_STATE", result.message ?? "Request failed");
     } catch (e: any) {
         // Duplicate proposal for same task+user (composite PK)
         if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-            return res.status(409).json({ ok: false, message: "You already submitted a proposal for this task" });
+            return fail(res, 409, "ALREADY_EXISTS", "You already submitted a proposal for this task");
         }
         console.error(e);
-        return res.status(500).json({ ok: false, message: "Server Error" });
+        return fail(res, 500, "SERVER_ERROR", "Server Error");
     }
 })
 
 router.get("/:taskId/proposals", authorizeUser, async (req: Request, res: Response) => {
     const task = await prisma.task.findUnique({ where: { id: req.params.taskId as string } })
-    if (!task) return res.status(404).json({ ok: false, message: "Task Not Found" })
-    if (task.ownerId !== res.locals.userId) return res.status(403).json({ ok: false, message: "Proposal Forbidden" })
+    if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found")
+    if (task.ownerId !== res.locals.userId) return fail(res, 403, "FORBIDDEN", "Proposal Forbidden")
 
     const proposals = await prisma.proposal.findMany({
         where: {
@@ -353,7 +356,7 @@ router.get("/:taskId/proposals", authorizeUser, async (req: Request, res: Respon
         },
         orderBy: [{ createdAt: "asc" }, { userId: "desc" }]
     })
-    return res.status(200).json({ ok: true, proposals })
+    return ok(res, { proposals })
 })
 
 router.post("/:taskId/assign", authorizeUser, async (req: Request, res: Response) => {
@@ -362,13 +365,13 @@ router.post("/:taskId/assign", authorizeUser, async (req: Request, res: Response
 
     const body = z.object({ userId: z.string().min(1) }).safeParse(req.body);
     if (!body.success) {
-        return res.status(400).json({ ok: false, message: "Wrong body format" });
+        return fail(res, 400, "VALIDATION_ERROR", "Wrong body format", body.error.issues);
     }
 
     const taskerId = body.data.userId;
 
     if (taskerId === ownerId) {
-        return res.status(400).json({ ok: false, message: "Cannot assign to yourself" });
+        return fail(res, 400, "VALIDATION_ERROR", "Cannot assign to yourself");
     }
 
     try {
@@ -379,15 +382,15 @@ router.post("/:taskId/assign", authorizeUser, async (req: Request, res: Response
             });
 
             if (!task) {
-                return { status: 404 as const, body: { ok: false, message: "Task Not Found" } };
+                return { status: 404 as const, code: "NOT_FOUND" as const, message: "Task Not Found", data: null as null };
             }
 
             if (task.ownerId !== ownerId) {
-                return { status: 403 as const, body: { ok: false, message: "Forbidden" } };
+                return { status: 403 as const, code: "FORBIDDEN" as const, message: "Forbidden", data: null as null };
             }
 
             if (task.status !== "OPEN" || task.taskerId) {
-                return { status: 409 as const, body: { ok: false, message: "Task is not assignable" } };
+                return { status: 409 as const, code: "CONFLICT_STATE" as const, message: "Task is not assignable", data: null as null };
             }
 
             const proposal = await tx.proposal.findUnique({
@@ -401,7 +404,7 @@ router.post("/:taskId/assign", authorizeUser, async (req: Request, res: Response
             });
 
             if (!proposal) {
-                return { status: 403 as const, body: { ok: false, message: "Assignment Forbidden" } };
+                return { status: 403 as const, code: "FORBIDDEN" as const, message: "Assignment Forbidden", data: null as null };
             }
 
             const updatedCount = await tx.task.updateMany({
@@ -410,7 +413,7 @@ router.post("/:taskId/assign", authorizeUser, async (req: Request, res: Response
             });
 
             if (updatedCount.count === 0) {
-                return { status: 409 as const, body: { ok: false, message: "Task already updated" } };
+                return { status: 409 as const, code: "CONFLICT_STATE" as const, message: "Task already updated", data: null as null };
             }
 
             const updatedTask = await tx.task.findUnique({
@@ -420,14 +423,19 @@ router.post("/:taskId/assign", authorizeUser, async (req: Request, res: Response
 
             return {
                 status: 200 as const,
-                body: { ok: true, message: "Assignment Successful", task: updatedTask },
+                code: null as null,
+                message: "Assignment Successful" as const,
+                data: { task: updatedTask },
             };
         });
 
-        return res.status(result.status).json(result.body);
+        if (result.status === 200) {
+            return ok(res, result.data, result.message);
+        }
+        return fail(res, result.status, result.code ?? "CONFLICT_STATE", result.message ?? "Request failed");
     } catch (e) {
         console.error(e);
-        return res.status(500).json({ ok: false, message: "Server Error" });
+        return fail(res, 500, "SERVER_ERROR", "Server Error");
     }
 })
 
@@ -445,10 +453,10 @@ router.post("/:taskId/submit", authorizeUser, async (req: Request, res: Response
         })
 
         if (!exists) {
-            return res.status(404).json({ ok: false, message: "Task Not Found" })
+            return fail(res, 404, "NOT_FOUND", "Task Not Found")
         }
 
-        return res.status(403).json({ ok: false, message: "Forbidden" })
+        return fail(res, 403, "FORBIDDEN", "Forbidden")
     }
     const task = await prisma.task.findUnique({
         where: { id: taskId },
@@ -459,8 +467,8 @@ router.post("/:taskId/submit", authorizeUser, async (req: Request, res: Response
             updatedAt: true
         }
     })
-    if (!task) return res.status(404).json({ ok: false, message: "Task Not Found" })
-    return res.status(200).json({ ok: true, message: "Submission Successful", task })
+    if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found")
+    return ok(res, { task }, "Submission Successful")
 })
 
 router.post("/:taskId/confirm", authorizeUser, async (req: Request, res: Response) => {
@@ -477,10 +485,10 @@ router.post("/:taskId/confirm", authorizeUser, async (req: Request, res: Respons
         })
 
         if (!exists) {
-            return res.status(404).json({ ok: false, message: "Task Not Found" })
+            return fail(res, 404, "NOT_FOUND", "Task Not Found")
         }
 
-        return res.status(403).json({ ok: false, message: "Forbidden" })
+        return fail(res, 403, "FORBIDDEN", "Forbidden")
     }
     const task = await prisma.task.findUnique({
         where: { id: taskId },
@@ -491,8 +499,8 @@ router.post("/:taskId/confirm", authorizeUser, async (req: Request, res: Respons
             updatedAt: true
         }
     })
-    if (!task) return res.status(404).json({ ok: false, message: "Task Not Found" })
-    return res.status(200).json({ ok: true, message: "Confirmation Successful", task })
+    if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found")
+    return ok(res, { task }, "Confirmation Successful")
 })
 
 router.post("/:taskId/review", authorizeUser, async (req: Request, res: Response) => {
@@ -502,7 +510,7 @@ router.post("/:taskId/review", authorizeUser, async (req: Request, res: Response
     }).safeParse(req.body);
 
     if (!body.success) {
-        return res.status(400).json({ ok: false, message: "Wrong Body Format" });
+        return fail(res, 400, "VALIDATION_ERROR", "Wrong Body Format", body.error.issues);
     }
 
     const userId = res.locals.userId as string;
@@ -521,7 +529,7 @@ router.post("/:taskId/review", authorizeUser, async (req: Request, res: Response
             });
 
             if (!task) {
-                return { status: 404 as const, body: { ok: false, message: "Task Not Found" } };
+                return { status: 404 as const, code: "NOT_FOUND" as const, message: "Task Not Found", data: null as null };
             }
 
             if (
@@ -529,7 +537,7 @@ router.post("/:taskId/review", authorizeUser, async (req: Request, res: Response
                 task.status !== "COMPLETED" ||
                 !task.taskerId
             ) {
-                return { status: 403 as const, body: { ok: false, message: "Forbidden" } };
+                return { status: 403 as const, code: "FORBIDDEN" as const, message: "Forbidden", data: null as null };
             }
 
             await tx.review.create({
@@ -561,16 +569,19 @@ router.post("/:taskId/review", authorizeUser, async (req: Request, res: Response
                 select: { id: true, username: true, ratingAvg: true, ratingCount: true },
             });
 
-            return { status: 200 as const, body: { ok: true, tasker: updatedTasker } };
+            return { status: 201 as const, code: null as null, message: undefined as undefined, data: { tasker: updatedTasker } };
         });
 
-        return res.status(result.status).json(result.body);
+        if (result.status === 201) {
+            return ok(res, result.data, undefined, 201);
+        }
+        return fail(res, result.status, result.code ?? "FORBIDDEN", result.message ?? "Request failed");
     } catch (e: any) {
         if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-            return res.status(409).json({ ok: false, message: "Review already exists" });
+            return fail(res, 409, "ALREADY_EXISTS", "Review already exists");
         }
         console.error(e);
-        return res.status(500).json({ ok: false, message: "Server Error" });
+        return fail(res, 500, "SERVER_ERROR", "Server Error");
     }
 })
 
@@ -588,19 +599,19 @@ router.post("/:taskId/cancel", authorizeUser, async (req: Request, res: Response
             select: {ownerId: true, status: true}
         })
         if (!task) {
-            return res.status(404).json({ok: false, message: "Task Not Found"})
+            return fail(res, 404, "NOT_FOUND", "Task Not Found")
         }
         if (task.ownerId !== userId) {
-            return res.status(403).json({ok: false, message: "Forbidden"})
+            return fail(res, 403, "FORBIDDEN", "Forbidden")
         }
         
         if (task.status !== "OPEN") {
-            return res.status(409).json({ok: false, message: "Task Is Not Open"})
+            return fail(res, 409, "CONFLICT_STATE", "Task Is Not Open")
         }
-        return res.status(409).json({ ok: false, message: "Task could not be cancelled" });
+        return fail(res, 409, "CONFLICT_STATE", "Task could not be cancelled");
     }
 
-    return res.status(200).json({ok: true, message: "Task Cancelled Successfully", task: tasks[0]})
+    return ok(res, { task: tasks[0] }, "Task Cancelled Successfully")
 })
 
 router.post("/:taskId/unassign", authorizeUser, async (req: Request, res: Response) => {
@@ -624,18 +635,18 @@ router.post("/:taskId/unassign", authorizeUser, async (req: Request, res: Respon
             select: {ownerId: true, status: true}
         })
         if (!task) {
-            return res.status(404).json({ok: false, message: "Task Not Found"})
+            return fail(res, 404, "NOT_FOUND", "Task Not Found")
         }
         if (task.ownerId !== userId) {
-            return res.status(403).json({ok: false, message: "Forbidden"})
+            return fail(res, 403, "FORBIDDEN", "Forbidden")
         }
         
         if (task.status !== "ASSIGNED" && task.status !== "SUBMITTED" ) {
-            return res.status(409).json({ok: false, message: "Task is not assigned or submitten"})
+            return fail(res, 409, "CONFLICT_STATE", "Task is not assigned or submitten")
         }
-        return res.status(409).json({ ok: false, message: "Task could not be unassigned" });
+        return fail(res, 409, "CONFLICT_STATE", "Task could not be unassigned");
     }
-    return res.status(200).json({ok: true, message: "Task Unassigned Successfully", task: tasks[0]})
+    return ok(res, { task: tasks[0] }, "Task Unassigned Successfully")
 })
 
 function isNumber(value: string): boolean {
