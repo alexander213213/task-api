@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response, } from "express"
 import { PrismaClientKnownRequestError } from "../../generated/prisma/internal/prismaNamespace"
+import { fail } from "../utils/respond"
 
 export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction) {
     // console.error(err)
@@ -8,16 +9,16 @@ export function errorHandler(err: unknown, req: Request, res: Response, next: Ne
             const fields = err.meta?.target as string[] | undefined
 
             if (fields?.includes("email")) {
-                return res.status(409).json({ ok: false, error: "Email already exists" })
+                return fail(res, 409, "ALREADY_EXISTS", "Email already exists")
             }
 
             if (fields?.includes("username")) {
-                return res.status(409).json({ ok: false, error: "Username already exists" })
+                return fail(res, 409, "ALREADY_EXISTS", "Username already exists")
             }
 
-            return res.status(409).json({ ok: false, error: "Unique constraint failed" })
+            return fail(res, 409, "ALREADY_EXISTS", "Unique constraint failed")
         }
     }
 
-    res.status(500).json({ error: "Internal server error" })
+    return fail(res, 500, "SERVER_ERROR", "Internal server error")
 }

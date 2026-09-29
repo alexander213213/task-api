@@ -59,14 +59,14 @@ async function walkFeed(
         const res = await request(app).get(path).set("Cookie", cookies);
         expect(res.status).toBe(200);
         expect(res.body.ok).toBe(true);
-        for (const t of res.body.tasks as Array<{ id: string }>) ids.push(t.id);
+        for (const t of res.body.data.tasks as Array<{ id: string }>) ids.push(t.id);
         pages++;
-        if (!res.body.hasNextPage) {
-            expect(res.body.nextCursor).toBeNull();
+        if (!res.body.data.hasNextPage) {
+            expect(res.body.data.nextCursor).toBeNull();
             break;
         }
-        expect(typeof res.body.nextCursor).toBe("string");
-        cursor = res.body.nextCursor as string;
+        expect(typeof res.body.data.nextCursor).toBe("string");
+        cursor = res.body.data.nextCursor as string;
     }
     return { ids, pages };
 }
@@ -84,7 +84,7 @@ describe("GET /tasks pagination", () => {
 
         const res = await request(app).get("/tasks?limit=7").set("Cookie", cookies);
         expect(res.status).toBe(200);
-        const tasks = res.body.tasks as Array<{ id: string; createdAt: string }>;
+        const tasks = res.body.data.tasks as Array<{ id: string; createdAt: string }>;
         expect(tasks).toHaveLength(7);
         const times = tasks.map((t) => new Date(t.createdAt).getTime());
         expect([...times].sort((a, b) => b - a)).toEqual(times);
@@ -130,7 +130,7 @@ describe("GET /tasks pagination", () => {
             .get("/tasks?sort_by=deadline_soon&limit=7")
             .set("Cookie", cookies);
         expect(res.status).toBe(200);
-        const tasks = res.body.tasks as Array<{ deadline: string }>;
+        const tasks = res.body.data.tasks as Array<{ deadline: string }>;
         const times = tasks.map((t) => new Date(t.deadline).getTime());
         expect([...times].sort((a, b) => a - b)).toEqual(times);
     });
@@ -150,6 +150,31 @@ describe("GET /tasks pagination", () => {
         }
     });
 
+    it("uses the standard envelope with code and issues on errors", async () => {
+        const owner = await createUser("owner7", "owner7@test.com");
+        const viewer = await createUser("viewer7", "viewer7@test.com");
+        await seedTasks(owner.id);
+        const cookies = await loginCookies({ email: viewer.email });
+
+        const badCursor = await request(app)
+            .get("/tasks?sort_by=newest&cursor=junk")
+            .set("Cookie", cookies);
+        expect(badCursor.status).toBe(400);
+        expect(badCursor.body).toMatchObject({ ok: false, code: "VALIDATION_ERROR" });
+        expect(typeof badCursor.body.message).toBe("string");
+
+        const badBody = await request(app)
+            .post("/auth/register")
+            .send({ username: "x" });
+        expect(badBody.status).toBe(400);
+        expect(badBody.body.code).toBe("VALIDATION_ERROR");
+        expect(Array.isArray(badBody.body.issues)).toBe(true);
+
+        const unauth = await request(app).get("/tasks");
+        expect(unauth.status).toBe(401);
+        expect(unauth.body).toMatchObject({ ok: false, code: "UNAUTHORIZED" });
+    });
+
     it("rejects a cursor minted for a different sort with 400", async () => {
         const owner = await createUser("owner6", "owner6@test.com");
         const viewer = await createUser("viewer6", "viewer6@test.com");
@@ -160,7 +185,7 @@ describe("GET /tasks pagination", () => {
             .get("/tasks?sort_by=newest&limit=3")
             .set("Cookie", cookies);
         expect(first.status).toBe(200);
-        const cursor = first.body.nextCursor as string;
+        const cursor = first.body.data.nextCursor as string;
 
         const res = await request(app)
             .get(`/tasks?sort_by=reward_desc&limit=3&cursor=${encodeURIComponent(cursor)}`)
