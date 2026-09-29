@@ -4,6 +4,7 @@ import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
 import { assertNever } from "../services/assertNever"
 import { fail, ok } from "../utils/respond"
+import { clampLimit, paginate } from "../utils/paging"
 import { decodeCursor, encodeCursor, keysetWhere, sortValueFor } from "../utils/cursor"
 import { Prisma, Task } from "../../generated/prisma/client"
 
@@ -78,7 +79,7 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
 
     const query = parseResult.data
 
-    const limit = Math.min(100, Math.max(1, query.limit ?? 20))
+    const limit = clampLimit(query.limit)
 
     let orderBy: Prisma.TaskOrderByWithRelationInput[] = []
 
@@ -144,12 +145,9 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
         orderBy
     })
 
-    const hasNextPage = tasks.length > limit
-    const page = hasNextPage ? tasks.slice(0, limit) : tasks
-    const last = page[page.length - 1]
-    const nextCursor = hasNextPage && last
-        ? encodeCursor(query.sort_by, sortValueFor(query.sort_by, last), last.id)
-        : null
+    const { page, nextCursor, hasNextPage } = paginate(tasks, limit, (last) =>
+        encodeCursor(query.sort_by, sortValueFor(query.sort_by, last), last.id)
+    )
 
 
     const tasksBasicInfo = page.map(({ taskerId, updatedAt, ...safeTask }) => safeTask)
@@ -160,49 +158,104 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
     })
 })
 
-router.get("/me", authorizeUser, async (req: Request, res: Response) => {
+const myTasksQuerySchema = z.object({
+    cursor: z.string().optional(),
+    limit: z.coerce.number().optional(),
+    status: z.enum(["OPEN", "ASSIGNED", "SUBMITTED", "COMPLETED", "CANCELLED"]).optional(),
+})
+
+/** Shared newest-first keyset pagination for per-user task lists. */
+async function paginateUserTasks(
+    res: Response,
+    where: Prisma.TaskWhereInput,
+    include: Prisma.TaskInclude,
+    cursor: string | undefined,
+    limit: number,
+) {
+    let keyset: Prisma.TaskWhereInput | undefined
+    if (cursor !== undefined) {
+        const decoded = decodeCursor(cursor)
+        if (!decoded || decoded.sort_by !== "newest") {
+            return fail(res, 400, "VALIDATION_ERROR", "Invalid cursor")
+        }
+        try {
+            keyset = keysetWhere(decoded)
+        } catch {
+            return fail(res, 400, "VALIDATION_ERROR", "Invalid cursor")
+        }
+    }
+
     const tasks = await prisma.task.findMany({
-        where: {
-            ownerId: res.locals.userId as string
-        },
-        include: {
-            tasker: {
-                select: {
-                    username: true
-                }
-            },
-        },
-        orderBy: [{createdAt: "desc"}, {id: "desc"}]
+        where: keyset ? { AND: [where, keyset] } : where,
+        take: limit + 1,
+        include,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     })
 
-    return ok(res, { tasks })
+    const { page, nextCursor, hasNextPage } = paginate(tasks, limit, (last) =>
+        encodeCursor("newest", sortValueFor("newest", last), last.id)
+    )
+
+    return ok(res, {
+        tasks: page.map(({ taskerId, ...safeTask }) => safeTask),
+        nextCursor,
+        hasNextPage,
+    })
+}
+
+router.get("/me", authorizeUser, async (req: Request, res: Response) => {
+    const parsed = myTasksQuerySchema.safeParse(req.query)
+    if (!parsed.success) {
+        return fail(res, 400, "VALIDATION_ERROR", "Invalid Query Parameters", parsed.error.issues)
+    }
+
+    const where: Prisma.TaskWhereInput = { ownerId: res.locals.userId as string }
+    if (parsed.data.status !== undefined) where.status = parsed.data.status
+
+    return paginateUserTasks(res, where, {
+        tasker: { select: { username: true } },
+        _count: { select: { proposals: true } },
+    }, parsed.data.cursor, clampLimit(parsed.data.limit))
 })
 
 router.get("/assigned/me", authorizeUser, async (req: Request, res: Response) => {
-    const tasks = await prisma.task.findMany({
-        where: {
-            taskerId: res.locals.userId as string
-        },
-        include: {
-            owner: {
-                select: {
-                    username: true
-                }
-            }
-        }
-    })
-    return ok(res, { tasks })
+    const parsed = myTasksQuerySchema.safeParse(req.query)
+    if (!parsed.success) {
+        return fail(res, 400, "VALIDATION_ERROR", "Invalid Query Parameters", parsed.error.issues)
+    }
+
+    const where: Prisma.TaskWhereInput = { taskerId: res.locals.userId as string }
+    if (parsed.data.status !== undefined) where.status = parsed.data.status
+
+    return paginateUserTasks(res, where, {
+        owner: { select: { username: true } },
+    }, parsed.data.cursor, clampLimit(parsed.data.limit))
 })
 
 router.get("/:taskId", authorizeUser, async (req: Request, res: Response) => {
+    const viewerId = res.locals.userId as string
 
-    const task = await prisma.task.findUnique({ where: { id: req.params.taskId as string } })
+    const task = await prisma.task.findUnique({
+        where: { id: req.params.taskId as string },
+        include: {
+            owner: { select: { username: true, ratingAvg: true, ratingCount: true } },
+            tasker: { select: { username: true, ratingAvg: true, ratingCount: true } },
+            review: { select: { stars: true, comment: true, createdAt: true } },
+            _count: { select: { proposals: true } },
+        },
+    })
 
     if (!task) {
         return fail(res, 404, "NOT_FOUND", "Task Not Found")
     }
 
-    return ok(res, { task })
+    const myProposal = await prisma.proposal.findUnique({
+        where: { taskId_userId: { taskId: task.id, userId: viewerId } },
+        select: { title: true, body: true, createdAt: true },
+    })
+
+    const { taskerId, ...rest } = task
+    return ok(res, { task: { ...rest, myProposal } })
 
 })
 
