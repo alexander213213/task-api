@@ -3,6 +3,7 @@ import express from "express";
 import 'dotenv/config'
 import authRouter from "./routes/auth"
 import taskRouter from "./routes/task"
+import usersRouter from "./routes/users"
 import eventsRouter from "./realtime/events"
 import cookieParser from "cookie-parser"
 import cors from "cors"
@@ -27,6 +28,7 @@ app.use(express.json())
 app.use(cookieParser())
 app.use("/auth", authRouter)
 app.use("/tasks", taskRouter)
+app.use("/users", usersRouter)
 app.use("/events", eventsRouter)
 app.use(errorHandler)
 

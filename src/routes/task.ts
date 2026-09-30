@@ -21,7 +21,12 @@ const taskRequestSchema = z.object({
 const getTaskParamSchema = z.object({
     cursor: z.string().optional(),
     limit: z.coerce.number().optional(),
-    sort_by: z.enum(["newest", "reward_desc", "deadline_soon"]).default("newest")
+    sort_by: z.enum(["newest", "reward_desc", "deadline_soon"]).default("newest"),
+    q: z.string().trim().min(1).max(100).optional(),
+    minReward: z.coerce.number().positive().optional(),
+    maxReward: z.coerce.number().positive().optional(),
+    deadlineFrom: z.coerce.date().optional(),
+    deadlineTo: z.coerce.date().optional(),
 })
 const taskPatchSchema = z.discriminatedUnion("op", [
     z.object({
@@ -92,6 +97,14 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
 
     const limit = clampLimit(query.limit)
 
+    if (
+        query.minReward !== undefined &&
+        query.maxReward !== undefined &&
+        query.minReward > query.maxReward
+    ) {
+        return fail(res, 400, "VALIDATION_ERROR", "minReward must not exceed maxReward")
+    }
+
     let orderBy: Prisma.TaskOrderByWithRelationInput[] = []
 
     switch (query.sort_by) {
@@ -117,12 +130,32 @@ router.get("", authorizeUser, async (req: Request, res: Response) => {
             assertNever(query.sort_by)
     }
 
+    const deadlineFilter: Prisma.DateTimeFilter = { gt: new Date() }
+    if (query.deadlineFrom !== undefined) deadlineFilter.gte = query.deadlineFrom
+    if (query.deadlineTo !== undefined) deadlineFilter.lte = query.deadlineTo
+
     const baseWhere: Prisma.TaskWhereInput = {
         status: "OPEN",
-        deadline: { gt: new Date() },
+        deadline: deadlineFilter,
         NOT: {
             ownerId: res.locals.userId as string
-        }
+        },
+        ...(query.q !== undefined
+            ? {
+                OR: [
+                    { title: { contains: query.q, mode: "insensitive" as const } },
+                    { description: { contains: query.q, mode: "insensitive" as const } },
+                ],
+            }
+            : {}),
+        ...(query.minReward !== undefined || query.maxReward !== undefined
+            ? {
+                reward: {
+                    ...(query.minReward !== undefined ? { gte: query.minReward } : {}),
+                    ...(query.maxReward !== undefined ? { lte: query.maxReward } : {}),
+                },
+            }
+            : {}),
     }
 
     let keyset: Prisma.TaskWhereInput | undefined
@@ -454,6 +487,83 @@ router.get("/:taskId/proposals", authorizeUser, async (req: Request, res: Respon
         orderBy: [{ createdAt: "asc" }, { userId: "desc" }]
     })
     return ok(res, { proposals })
+})
+
+router.patch("/:taskId/proposals/me", authorizeUser, async (req: Request, res: Response) => {
+    const taskId = req.params.taskId as string
+    const userId = res.locals.userId as string
+
+    const parsed = proposalSchema.safeParse(req.body)
+    if (!parsed.success) {
+        return fail(res, 400, "VALIDATION_ERROR", "Invalid Request Body", parsed.error.issues)
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+        const task = await tx.task.findUnique({
+            where: { id: taskId },
+            select: { id: true, status: true },
+        })
+        if (!task) return null
+        if (task.status !== "OPEN") return "locked" as const
+        try {
+            return await tx.proposal.update({
+                where: { taskId_userId: { taskId: task.id, userId } },
+                data: { title: parsed.data.title, body: parsed.data.body },
+                select: { taskId: true, userId: true, title: true, body: true, createdAt: true, updatedAt: true },
+            })
+        } catch (e) {
+            if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") return null
+            throw e
+        }
+    })
+
+    if (updated === null) return fail(res, 404, "NOT_FOUND", "Proposal Not Found")
+    if (updated === "locked") {
+        return fail(res, 409, "CONFLICT_STATE", "Proposals can only be edited while the task is open")
+    }
+    return ok(res, { proposal: updated })
+})
+
+router.delete("/:taskId/proposals/me", authorizeUser, async (req: Request, res: Response) => {
+    const taskId = req.params.taskId as string
+    const userId = res.locals.userId as string
+
+    const result = await prisma.$transaction(async (tx) => {
+        const task = await tx.task.findUnique({
+            where: { id: taskId },
+            select: { id: true, status: true },
+        })
+        if (!task) return { status: 404 as const }
+        if (task.status !== "OPEN") return { status: 409 as const }
+        try {
+            await tx.proposal.delete({
+                where: { taskId_userId: { taskId: task.id, userId } },
+            })
+        } catch (e) {
+            if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
+                return { status: 404 as const }
+            }
+            throw e
+        }
+        return { status: 200 as const }
+    })
+
+    if (result.status === 404) return fail(res, 404, "NOT_FOUND", "Proposal Not Found")
+    if (result.status === 409) {
+        return fail(res, 409, "CONFLICT_STATE", "Proposals can only be withdrawn while the task is open")
+    }
+    return ok(res, { taskId }, "Proposal Withdrawn")
+})
+
+router.get("/:taskId/review", authorizeUser, async (req: Request, res: Response) => {
+    const task = await prisma.task.findUnique({ where: { id: req.params.taskId as string } })
+    if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found")
+
+    const review = await prisma.review.findUnique({
+        where: { taskId: task.id },
+        select: { id: true, stars: true, comment: true, createdAt: true, reviewerId: true, revieweeId: true },
+    })
+    return ok(res, { review })
 })
 
 router.post("/:taskId/assign", authorizeUser, async (req: Request, res: Response) => {
