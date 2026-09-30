@@ -5,6 +5,7 @@ import { authorizeUser } from "../middlewares/authorize"
 import { assertNever } from "../services/assertNever"
 import { fail, ok } from "../utils/respond"
 import { clampLimit, paginate } from "../utils/paging"
+import { bus } from "../realtime/bus"
 import { decodeCursor, encodeCursor, keysetWhere, sortValueFor } from "../utils/cursor"
 import { Prisma, Task } from "../../generated/prisma/client"
 
@@ -66,6 +67,16 @@ router.post("", authorizeUser, async (req: Request, res: Response) => {
             ownerId: res.locals.userId as string
         }
     })
+
+    // Emit after commit — broadcast so feed clients can prepend live.
+    bus.publish("task:created", ["*"], {
+        id: created.id,
+        title: created.title,
+        reward: created.reward.toString(),
+        deadline: created.deadline,
+        ownerId: created.ownerId,
+        ownerUsername: user.username,
+    });
 
     return ok(res, { task: created }, "Task Created Successfully", 201)
 })
@@ -398,6 +409,17 @@ router.post("/:taskId/proposals", authorizeUser, async (req: Request, res: Respo
         });
 
         if (result.status === 201) {
+            const owner = await prisma.task.findUnique({
+                where: { id: taskId },
+                select: { ownerId: true },
+            });
+            if (owner) {
+                bus.publish("proposal:created", [owner.ownerId], {
+                    taskId,
+                    userId,
+                    title: result.data.proposal.title,
+                });
+            }
             return ok(res, result.data, undefined, 201);
         }
         return fail(res, result.status, result.code ?? "CONFLICT_STATE", result.message ?? "Request failed");
@@ -493,7 +515,7 @@ router.post("/:taskId/assign", authorizeUser, async (req: Request, res: Response
 
             const updatedTask = await tx.task.findUnique({
                 where: { id: task.id },
-                select: { id: true, status: true, ownerId: true, taskerId: true, updatedAt: true },
+                select: { id: true, title: true, status: true, ownerId: true, taskerId: true, updatedAt: true },
             });
 
             return {
@@ -505,6 +527,14 @@ router.post("/:taskId/assign", authorizeUser, async (req: Request, res: Response
         });
 
         if (result.status === 200) {
+            const assigned = result.data.task;
+            if (assigned?.taskerId) {
+                bus.publish("task:assigned", [assigned.taskerId], {
+                    taskId: assigned.id,
+                    title: assigned.title,
+                    ownerId: assigned.ownerId,
+                });
+            }
             return ok(res, result.data, result.message);
         }
         return fail(res, result.status, result.code ?? "CONFLICT_STATE", result.message ?? "Request failed");
@@ -541,12 +571,19 @@ router.post("/:taskId/submit", authorizeUser, async (req: Request, res: Response
         where: { id: taskId },
         select: {
             id: true,
+            title: true,
             status: true,
+            ownerId: true,
             taskerId: true,
             updatedAt: true
         }
     })
     if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found")
+    bus.publish("task:submitted", [task.ownerId], {
+        taskId: task.id,
+        title: task.title,
+        taskerId: task.taskerId,
+    });
     return ok(res, { task }, "Submission Successful")
 })
 
@@ -577,12 +614,19 @@ router.post("/:taskId/confirm", authorizeUser, async (req: Request, res: Respons
         where: { id: taskId },
         select: {
             id: true,
+            title: true,
             status: true,
             taskerId: true,
             updatedAt: true
         }
     })
     if (!task) return fail(res, 404, "NOT_FOUND", "Task Not Found")
+    if (task.taskerId) {
+        bus.publish("task:confirmed", [task.taskerId], {
+            taskId: task.id,
+            title: task.title,
+        });
+    }
     return ok(res, { task }, "Confirmation Successful")
 })
 
@@ -656,6 +700,10 @@ router.post("/:taskId/review", authorizeUser, async (req: Request, res: Response
         });
 
         if (result.status === 201) {
+            bus.publish("review:received", [result.data.tasker.id], {
+                taskId,
+                stars: body.data.stars,
+            });
             return ok(res, result.data, undefined, 201);
         }
         return fail(res, result.status, result.code ?? "FORBIDDEN", result.message ?? "Request failed");
@@ -701,6 +749,12 @@ router.post("/:taskId/unassign", authorizeUser, async (req: Request, res: Respon
     const taskId = req.params.taskId as string
     const userId = res.locals.userId as string
 
+    // Capture the current tasker before clearing it, for the SSE notify.
+    const prev = await prisma.task.findUnique({
+        where: { id: taskId },
+        select: { taskerId: true, title: true },
+    })
+
     const tasks = await prisma.task.updateManyAndReturn({
         where: {
             id: taskId,
@@ -728,6 +782,12 @@ router.post("/:taskId/unassign", authorizeUser, async (req: Request, res: Respon
             return fail(res, 409, "CONFLICT_STATE", "Task is not assigned or submitten")
         }
         return fail(res, 409, "CONFLICT_STATE", "Task could not be unassigned");
+    }
+    if (prev?.taskerId) {
+        bus.publish("task:unassigned", [prev.taskerId], {
+            taskId,
+            title: prev.title,
+        });
     }
     return ok(res, { task: tasks[0] }, "Task Unassigned Successfully")
 })
