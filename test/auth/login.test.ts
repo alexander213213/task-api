@@ -21,7 +21,7 @@ describe("POST /auth/login", () => {
             .send(payload)
 
         expect(res.status).toBe(400)
-        expect(res.ok).toBe(false)
+        expect(res.body.ok).toBe(false)
     })
 
     it("returns 401 if credentials are invalid", async () => {
