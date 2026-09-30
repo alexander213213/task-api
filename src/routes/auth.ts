@@ -6,12 +6,9 @@ import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
 import { assertNever } from "../services/assertNever"
 import { fail, ok } from "../utils/respond"
+import { sensitiveLimiter } from "../middlewares/rateLimit"
 import {
-    accessCookieTTL,
-    cookieBase,
-    generateAccessToken,
     issueSession,
-    refreshCookieTTL,
     refreshTokenSecret,
 } from "../services/session"
 import {
@@ -53,7 +50,7 @@ const usernameSchema = z.object({
 const loginSchema = z.union([emailSchema, usernameSchema])
 
 
-router.post("/register", async (req: Request, res: Response) => {
+router.post("/register", sensitiveLimiter, async (req: Request, res: Response) => {
     const result = registrationSchema.safeParse(req.body)
     if (!result.success) {
         return fail(res, 400, "VALIDATION_ERROR", "Wrong registration object format", result.error.issues)
@@ -76,7 +73,7 @@ router.post("/register", async (req: Request, res: Response) => {
     return ok(res, null, "Sign-up successful", 201)
 })
 
-router.post("/login", async (req: Request, res: Response) => {
+router.post("/login", sensitiveLimiter, async (req: Request, res: Response) => {
     const result = loginSchema.safeParse(req.body)
 
     if (!result.success) {
@@ -105,52 +102,60 @@ router.post("/login", async (req: Request, res: Response) => {
     return ok(res, { user: toSafeUser(user) })
 })
 
-router.post("/refresh", async (req: Request, res: Response) => {
+router.post("/refresh", sensitiveLimiter, async (req: Request, res: Response) => {
 
     const token: string | undefined = req.cookies?.refresh_token
     if (!token) {
         return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
 
-    let payload: { userId: string }
+    let payload: { userId: string; jti: string }
 
     try {
-        payload = verify(token, refreshTokenSecret) as { userId: string }
+        payload = verify(token, refreshTokenSecret) as { userId: string; jti: string }
     } catch {
         return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
 
-
-    const userId = payload.userId
-
-    await prisma.refreshToken.deleteMany({
-        where: { userId, createdAt: { lt: new Date(Date.now() - refreshCookieTTL) } }
-    })
-
-    const tokens = await prisma.refreshToken.findMany({
-        where: {
-            userId
-        }
-    })
-
-    let match = false
-    for (const t of tokens) {
-        if (await compare(token, t.tokenHash)) {
-            match = true
-            break
-        }
-    }
-
-    if (!match) {
+    if (!payload.jti) {
         return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
 
-    const accessToken = generateAccessToken({ userId })
-    res.cookie("access_token", accessToken, {
-        ...cookieBase,
-        maxAge: accessCookieTTL,
-        path: "/"
+    const userId = payload.userId
+
+    // Opportunistic prune of expired sessions.
+    await prisma.refreshToken.deleteMany({
+        where: { userId, expiresAt: { lt: new Date() } }
     })
+
+    const row = await prisma.refreshToken.findUnique({
+        where: { jti: payload.jti }
+    })
+
+    // Unknown session (logged out, forged, or pre-rotation token): plain 401.
+    if (!row || row.userId !== userId) {
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
+    }
+
+    if (!(await compare(token, row.tokenHash))) {
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
+    }
+
+    if (row.revokedAt) {
+        // Reuse of a rotated token: possible theft — revoke every session.
+        await prisma.refreshToken.updateMany({
+            where: { userId, revokedAt: null },
+            data: { revokedAt: new Date() },
+        })
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
+    }
+
+    // Rotate: retire this token, issue a fresh pair.
+    await prisma.refreshToken.update({
+        where: { id: row.id },
+        data: { revokedAt: new Date() },
+    })
+    await issueSession(req, res, userId)
 
     return ok(res, null, "Refresh Successful")
 })
@@ -213,6 +218,17 @@ router.post("/logout", authorizeUser, async (req: Request, res: Response) => {
     return ok(res, null, "Logout Successful")
 })
 
+router.post("/logout-all", authorizeUser, async (req: Request, res: Response) => {
+    const userId = res.locals.userId as string
+
+    await prisma.refreshToken.deleteMany({ where: { userId } })
+
+    res.clearCookie("refresh_token", {path: "/auth"})
+    res.clearCookie("access_token", {path: "/"})
+
+    return ok(res, null, "Logout Successful")
+})
+
 router.get("/exist", async (req: Request, res: Response) => {
     const queryRes = z.union([
         z.object({email: z.email()}),
@@ -269,7 +285,7 @@ async function ensureUniqueUsername(base: string): Promise<string> {
     return `${slug}${Date.now().toString(36)}`
 }
 
-router.post("/google", async (req: Request, res: Response) => {
+router.post("/google", sensitiveLimiter, async (req: Request, res: Response) => {
     const parsed = googleTokenSchema.safeParse(req.body)
     if (!parsed.success) {
         return fail(res, 400, "VALIDATION_ERROR", "Wrong Google Object Format", parsed.error.issues)
@@ -321,7 +337,7 @@ router.post("/google", async (req: Request, res: Response) => {
     return ok(res, { user: toSafeUser(user) }, undefined, 201)
 })
 
-router.post("/google/link", async (req: Request, res: Response) => {
+router.post("/google/link", sensitiveLimiter, async (req: Request, res: Response) => {
     const parsed = googleLinkSchema.safeParse(req.body)
     if (!parsed.success) {
         return fail(res, 400, "VALIDATION_ERROR", "Wrong Google Link Object Format", parsed.error.issues)
