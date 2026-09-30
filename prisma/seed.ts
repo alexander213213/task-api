@@ -13,9 +13,10 @@ const REFRESH_TOKENS_PER_USER = { min: 0, max: 3 };
 
 function pickStatus(): TaskStatus {
   return faker.helpers.weightedArrayElement<TaskStatus>([
-    { weight: 55, value: TaskStatus.OPEN },
+    { weight: 50, value: TaskStatus.OPEN },
     { weight: 15, value: TaskStatus.ASSIGNED },
-    { weight: 20, value: TaskStatus.COMPLETED },
+    { weight: 10, value: TaskStatus.SUBMITTED },
+    { weight: 15, value: TaskStatus.COMPLETED },
     { weight: 10, value: TaskStatus.CANCELLED },
   ]);
 }
@@ -88,7 +89,11 @@ async function main() {
     });
 
     let taskerId: string | null = null;
-    if (status === TaskStatus.ASSIGNED || status === TaskStatus.COMPLETED) {
+    if (
+      status === TaskStatus.ASSIGNED ||
+      status === TaskStatus.SUBMITTED ||
+      status === TaskStatus.COMPLETED
+    ) {
       taskerId = faker.helpers.arrayElement(userIds.filter((id) => id !== ownerId));
     }
 
@@ -182,6 +187,8 @@ async function main() {
         data: {
           userId: u.id,
           tokenHash: await bcrypt.hash(faker.string.uuid(), 8),
+          jti: faker.string.uuid(),
+          expiresAt: faker.date.future(),
         },
       });
     }

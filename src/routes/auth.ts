@@ -1,6 +1,7 @@
 import { sign, verify } from "jsonwebtoken"
 import express, { Request, Response } from "express"
 import { compare, hash } from "bcrypt"
+import { randomUUID } from "crypto"
 import z from "zod"
 import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
@@ -86,7 +87,7 @@ router.post("/login", async (req: Request, res: Response) => {
             : { username: data.username }
     })
 
-    if (!user) {
+    if (!user || !user.passwordHash) {
         return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
 
@@ -101,6 +102,8 @@ router.post("/login", async (req: Request, res: Response) => {
     await prisma.refreshToken.create({
         data: {
             tokenHash,
+            jti: randomUUID(),
+            expiresAt: new Date(Date.now() + refreshCookieTTL),
             userId: user.id,
         }
     })
