@@ -5,6 +5,8 @@ import authRouter from "./routes/auth"
 import taskRouter from "./routes/task"
 import usersRouter from "./routes/users"
 import eventsRouter from "./realtime/events"
+import { openapiSpec } from "./openapi/spec"
+import { apiReference } from "@scalar/express-api-reference"
 import cookieParser from "cookie-parser"
 import cors from "cors"
 import helmet from "helmet"
@@ -37,6 +39,8 @@ app.use("/auth", authRouter)
 app.use("/tasks", taskRouter)
 app.use("/users", usersRouter)
 app.use("/events", eventsRouter)
+app.get("/openapi.json", (_req, res) => res.json(openapiSpec))
+app.use("/openapi", apiReference({ content: openapiSpec }))
 app.use(errorHandler)
 
 export default app
