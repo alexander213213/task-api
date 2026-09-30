@@ -1,27 +1,31 @@
-import { sign, verify } from "jsonwebtoken"
+import { verify } from "jsonwebtoken"
 import express, { Request, Response } from "express"
 import { compare, hash } from "bcrypt"
-import { randomUUID } from "crypto"
 import z from "zod"
 import { prisma } from "../services/db"
 import { authorizeUser } from "../middlewares/authorize"
 import { assertNever } from "../services/assertNever"
 import { fail, ok } from "../utils/respond"
+import {
+    accessCookieTTL,
+    cookieBase,
+    generateAccessToken,
+    issueSession,
+    refreshCookieTTL,
+    refreshTokenSecret,
+} from "../services/session"
+import {
+    GoogleNotConfiguredError,
+    isEmailDomainAllowed,
+    verifyGoogleToken,
+} from "../services/google"
+import type { User } from "../../generated/prisma/client"
 
 const router = express.Router()
 
-const accessTokenSecret = process.env.ACCESS_TOKEN_SECRET!
-const refreshTokenSecret = process.env.REFRESH_TOKEN_SECRET!
-const accessTokenTTL = 60 * 15
-const accessCookieTTL = 1000 * 60 * 15
-const refreshTokenTTL = 60 * 60 * 24 * 7
-const refreshCookieTTL = 1000 * 60 * 60 * 24 * 7
-const isProd = process.env.NODE_ENV === "production"
-
-const cookieBase = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: isProd? "none" as const : "lax" as const,
+function toSafeUser(user: User) {
+    const { createdAt: _, passwordHash: __, updatedAt: ___, ...safeUser } = user
+    return safeUser
 }
 
 const registrationSchema = z.object({
@@ -96,31 +100,9 @@ router.post("/login", async (req: Request, res: Response) => {
     if (!passwordOk) {
         return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
     }
-    const accessToken = generateAccessToken({ userId: user.id })
-    const refreshToken = sign({ userId: user.id }, refreshTokenSecret, { expiresIn: refreshTokenTTL })
-    const tokenHash = await hash(refreshToken, 10)
-    await prisma.refreshToken.create({
-        data: {
-            tokenHash,
-            jti: randomUUID(),
-            expiresAt: new Date(Date.now() + refreshCookieTTL),
-            userId: user.id,
-        }
-    })
-    res.cookie("refresh_token", refreshToken, {
-        ...cookieBase,
-        maxAge: refreshCookieTTL,
-        path: "/auth"
-    })
+    await issueSession(req, res, user.id)
 
-    res.cookie("access_token", accessToken, {
-        ...cookieBase,
-        maxAge: accessCookieTTL,
-        path: "/"
-    })
-
-    const { createdAt: _, passwordHash: __, updatedAt: ___, ...safeUser } = user
-    return ok(res, { user: safeUser })
+    return ok(res, { user: toSafeUser(user) })
 })
 
 router.post("/refresh", async (req: Request, res: Response) => {
@@ -262,7 +244,129 @@ router.get("/exist", async (req: Request, res: Response) => {
     return ok(res, { exists: true })
 })
 
-function generateAccessToken(user: { userId: string }) {
-    return sign(user, accessTokenSecret, { expiresIn: accessTokenTTL })
+const googleTokenSchema = z.object({
+    idToken: z.string().min(1),
+})
+
+const googleLinkSchema = z.object({
+    idToken: z.string().min(1),
+    password: z.string().min(1),
+})
+
+async function ensureUniqueUsername(base: string): Promise<string> {
+    const slug = base
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, "")
+        .slice(0, 12) || "user"
+    for (let attempt = 0; attempt < 10; attempt++) {
+        const candidate = attempt === 0 ? `${slug}${Math.floor(Math.random() * 10000)}` : `${slug}${Math.floor(Math.random() * 1000000)}`
+        const taken = await prisma.user.findUnique({
+            where: { username: candidate },
+            select: { id: true },
+        })
+        if (!taken) return candidate
+    }
+    return `${slug}${Date.now().toString(36)}`
 }
+
+router.post("/google", async (req: Request, res: Response) => {
+    const parsed = googleTokenSchema.safeParse(req.body)
+    if (!parsed.success) {
+        return fail(res, 400, "VALIDATION_ERROR", "Wrong Google Object Format", parsed.error.issues)
+    }
+
+    let profile
+    try {
+        profile = await verifyGoogleToken(parsed.data.idToken)
+    } catch (e) {
+        if (e instanceof GoogleNotConfiguredError) {
+            return fail(res, 500, "SERVER_ERROR", "Google login not configured")
+        }
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Google token")
+    }
+
+    if (!profile.emailVerified) {
+        return fail(res, 403, "FORBIDDEN", "Google email not verified")
+    }
+    if (!isEmailDomainAllowed(profile.email)) {
+        return fail(res, 403, "FORBIDDEN", "Email domain not allowed")
+    }
+
+    const linked = await prisma.user.findUnique({ where: { googleId: profile.sub } })
+    if (linked) {
+        await issueSession(req, res, linked.id)
+        return ok(res, { user: toSafeUser(linked) })
+    }
+
+    const existing = await prisma.user.findUnique({ where: { email: profile.email } })
+    if (existing) {
+        // Never auto-link: the requester must prove password ownership first.
+        return fail(res, 409, "GOOGLE_LINK_REQUIRED", "This email already has an account. Sign in with your password to link Google.")
+    }
+
+    const username = await ensureUniqueUsername(profile.email.split("@")[0] ?? "user")
+    const user = await prisma.user.create({
+        data: {
+            email: profile.email,
+            username,
+            firstName: profile.givenName ?? username,
+            lastName: profile.familyName ?? "",
+            passwordHash: null,
+            googleId: profile.sub,
+            provider: "GOOGLE",
+            emailVerifiedAt: new Date(),
+        },
+    })
+    await issueSession(req, res, user.id)
+    return ok(res, { user: toSafeUser(user) }, undefined, 201)
+})
+
+router.post("/google/link", async (req: Request, res: Response) => {
+    const parsed = googleLinkSchema.safeParse(req.body)
+    if (!parsed.success) {
+        return fail(res, 400, "VALIDATION_ERROR", "Wrong Google Link Object Format", parsed.error.issues)
+    }
+
+    let profile
+    try {
+        profile = await verifyGoogleToken(parsed.data.idToken)
+    } catch (e) {
+        if (e instanceof GoogleNotConfiguredError) {
+            return fail(res, 500, "SERVER_ERROR", "Google login not configured")
+        }
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Google token")
+    }
+
+    if (!profile.emailVerified) {
+        return fail(res, 403, "FORBIDDEN", "Google email not verified")
+    }
+    if (!isEmailDomainAllowed(profile.email)) {
+        return fail(res, 403, "FORBIDDEN", "Email domain not allowed")
+    }
+
+    // Same message whether the account is missing or the password is wrong.
+    const user = await prisma.user.findUnique({ where: { email: profile.email } })
+    if (!user?.passwordHash) {
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
+    }
+    if (!(await compare(parsed.data.password, user.passwordHash))) {
+        return fail(res, 401, "UNAUTHORIZED", "Invalid Credentials")
+    }
+
+    if (user.googleId && user.googleId !== profile.sub) {
+        return fail(res, 409, "CONFLICT_STATE", "This account is already linked to a different Google account")
+    }
+
+    const updated = await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            googleId: profile.sub,
+            provider: user.provider === "GOOGLE" ? "GOOGLE" : "BOTH",
+            emailVerifiedAt: user.emailVerifiedAt ?? new Date(),
+        },
+    })
+    await issueSession(req, res, updated.id)
+    return ok(res, { user: toSafeUser(updated) })
+})
+
 export default router
