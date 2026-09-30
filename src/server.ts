@@ -7,12 +7,19 @@ import usersRouter from "./routes/users"
 import eventsRouter from "./realtime/events"
 import cookieParser from "cookie-parser"
 import cors from "cors"
+import helmet from "helmet"
 
 const app = express()
 
+// Helmet first. crossOriginResourcePolicy must stay cross-origin: the
+// Vercel front opens credentialed EventSource/fetch to this API.
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+}))
+
 const allowedOrigins = [
   "http://localhost:5173",              // local dev
-  process.env.FRONTEND_URL as string,   // production
+  ...(process.env.FRONTEND_URL?.split(",").map((s) => s.trim()).filter(Boolean) ?? []),
 ];
 
 app.use(cors({

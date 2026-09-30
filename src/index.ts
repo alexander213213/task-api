@@ -1,5 +1,9 @@
+import 'dotenv/config'
+import { assertEnv } from "./config";
 import app from "./server";
 
+
+assertEnv()
 
 const port = process.env.PORT ?? 3000
 

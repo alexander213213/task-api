@@ -24,13 +24,14 @@ export function generateAccessToken(user: { userId: string }) {
 
 /** Issues a refresh+access pair, persists the refresh row, and sets cookies. */
 export async function issueSession(req: Request, res: Response, userId: string): Promise<void> {
+    const jti = randomUUID();
     const accessToken = generateAccessToken({ userId });
-    const refreshToken = sign({ userId }, refreshTokenSecret, { expiresIn: refreshTokenTTL });
+    const refreshToken = sign({ userId, jti }, refreshTokenSecret, { expiresIn: refreshTokenTTL });
     const tokenHash = await hash(refreshToken, 10);
     await prisma.refreshToken.create({
         data: {
             tokenHash,
-            jti: randomUUID(),
+            jti,
             expiresAt: new Date(Date.now() + refreshCookieTTL),
             userAgent: req.headers["user-agent"]?.slice(0, 200) ?? null,
             ip: req.ip ?? null,
