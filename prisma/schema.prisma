@@ -15,6 +15,12 @@ enum TaskStatus {
   CANCELLED
 }
 
+enum AuthProvider {
+  PASSWORD
+  GOOGLE
+  BOTH
+}
+
 model User {
   id           String  @id @default(cuid())
   username     String  @unique
@@ -22,7 +28,11 @@ model User {
   firstName    String
   lastName     String
   middleName   String?
-  passwordHash String
+  passwordHash String?
+
+  googleId        String?       @unique
+  provider        AuthProvider  @default(PASSWORD)
+  emailVerifiedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -61,6 +71,10 @@ model Task {
   @@index([taskerId])
   @@index([ownerId])
   @@index([status])
+  @@index([status, deadline])
+  @@index([status, reward])
+  @@index([status, createdAt])
+  @@index([title])
 }
 
 model Proposal {
@@ -77,6 +91,7 @@ model Proposal {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([taskId, userId])
+  @@index([taskId, createdAt])
 }
 
 model Review {
@@ -85,6 +100,7 @@ model Review {
   stars     Int
   comment   String
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   taskId     String @unique
   reviewerId String
@@ -100,12 +116,19 @@ model Review {
 model RefreshToken {
   id        String @id @default(cuid())
   tokenHash String
+  jti       String @unique
 
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  userAgent String?
+  ip        String?
 
   user User @relation(fields: [userId], references: [id])
 
   userId String
 
   @@index([userId])
+  @@index([userId, expiresAt])
 }
