@@ -27,6 +27,7 @@ const EXPECTED_PATHS = [
     "/users/me/stats",
     "/users/{id}/public",
     "/events",
+    "/health",
 ];
 
 describe("openapi", () => {
