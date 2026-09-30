@@ -10,8 +10,10 @@
     "test": "vitest"
   },
   "dependencies": {
+    "@asteasolutions/zod-to-openapi": "^9.1.0",
     "@prisma/adapter-pg": "^7.4.0",
     "@prisma/client": "^7.4.1",
+    "@scalar/express-api-reference": "^0.10.24",
     "@types/cookie-parser": "^1.4.10",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",

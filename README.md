@@ -73,11 +73,12 @@ http://localhost:3000
 
 ## 🔐 Authentication
 
-Most endpoints require a Bearer token:
+Most endpoints require auth via the `access_token` cookie (set by login/refresh; browsers send it automatically).
 
-```
-Authorization: Bearer <access_token>
-```
+Interactive API docs (Scalar) are served by the API itself:
+
+* UI: `GET /openapi`
+* Spec: `GET /openapi.json`
 
 ---
 
